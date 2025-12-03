@@ -139,59 +139,101 @@ class BrowserController:
 
         return str(filepath)
 
-    def focus_edge_browser(self, timeout: float = 5.0) -> bool:
+    def focus_edge_browser(self, timeout: float = 5.0, max_retries: int = 3) -> bool:
         """
-        Attempt to focus Microsoft Edge browser window
+        Attempt to focus Microsoft Edge browser window using pygetwindow
 
         Args:
-            timeout: Max time to wait for focus
+            timeout: Max time to wait for focus per attempt
+            max_retries: Number of retry attempts if Edge not found
 
         Returns:
             bool: True if focused successfully
         """
-        logger.info("Focusing Microsoft Edge browser")
+        logger.info("Focusing Microsoft Edge browser (using pygetwindow)")
 
+        import pygetwindow as gw
+
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    logger.info(f"  Retry attempt {attempt + 1}/{max_retries}...")
+                    time.sleep(1)
+
+                # Find Edge windows by title (Edge windows contain "Edge" or specific page titles)
+                edge_windows = []
+                all_windows = gw.getAllWindows()
+
+                for win in all_windows:
+                    title = win.title.lower()
+                    # Edge windows typically have "edge" in title or are from msedge process
+                    if 'edge' in title or 'microsoft' in title:
+                        edge_windows.append(win)
+
+                # If no "edge" in title, look for any browser-like window
+                if not edge_windows:
+                    for win in all_windows:
+                        # Look for windows with common web page indicators
+                        if win.title and len(win.title) > 5:
+                            title = win.title.lower()
+                            if any(x in title for x in ['http', 'www', '.com', '.net', '.org', 'doordash', 'uber', 'grubhub']):
+                                edge_windows.append(win)
+
+                logger.info(f"  Found {len(edge_windows)} potential Edge window(s)")
+
+                if edge_windows:
+                    # Use the first (most recent) Edge window
+                    edge_win = edge_windows[0]
+                    logger.info(f"  Activating window: '{edge_win.title[:50]}...'")
+
+                    # Restore if minimized
+                    if edge_win.isMinimized:
+                        logger.info("  Window was minimized, restoring...")
+                        edge_win.restore()
+                        time.sleep(0.3)
+
+                    # Bring to front and activate
+                    try:
+                        edge_win.activate()
+                        time.sleep(0.5)  # Wait for activation
+                        logger.info("  ✓ Edge browser focused successfully")
+                        return True
+                    except Exception as e:
+                        # Sometimes activate() fails but window is still brought to front
+                        logger.warning(f"  activate() raised: {e}, but continuing...")
+                        # Try clicking on the window to ensure focus
+                        try:
+                            # Click on center of window
+                            center_x = edge_win.left + edge_win.width // 2
+                            center_y = edge_win.top + 100  # Click near top (toolbar area)
+                            pyautogui.click(center_x, center_y)
+                            time.sleep(0.3)
+                            logger.info("  ✓ Clicked on window to ensure focus")
+                            return True
+                        except:
+                            pass
+                else:
+                    logger.warning("  No Edge windows found")
+                    # List available windows for debugging
+                    visible_windows = [w.title for w in all_windows if w.title and w.visible]
+                    logger.info(f"  Available windows: {visible_windows[:5]}")
+
+            except Exception as e:
+                logger.error(f"  Error focusing Edge: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Fallback: Try Alt+Tab as last resort
+        logger.info("  Trying Alt+Tab as fallback...")
         try:
-            # Try to find Edge window using pyautogui
-            # This uses image recognition or window title matching
-            import subprocess
-
-            # Use PowerShell to activate Edge window
-            ps_command = '''
-            $edge = Get-Process msedge -ErrorAction SilentlyContinue | Where-Object {$_.MainWindowHandle -ne 0} | Select-Object -First 1
-            if ($edge) {
-                $sig = '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
-                Add-Type -MemberDefinition $sig -Name WinAPI -Namespace Win32
-                [Win32.WinAPI]::SetForegroundWindow($edge.MainWindowHandle)
-                Write-Output "OK"
-            } else {
-                Write-Output "NOT_FOUND"
-            }
-            '''
-
-            result = subprocess.run(
-                ['powershell', '-Command', ps_command],
-                capture_output=True,
-                text=True,
-                timeout=timeout
-            )
-
-            output = result.stdout.strip()
-
-            if output == "OK":
-                logger.info("  Edge browser focused")
-                time.sleep(0.5)  # Wait for focus to settle
-                return True
-            else:
-                logger.warning("  Edge browser not found or not running")
-                return False
-
-        except subprocess.TimeoutExpired:
-            logger.error("  Timeout waiting for Edge focus")
-            return False
+            pyautogui.hotkey('alt', 'tab')
+            time.sleep(0.5)
+            logger.info("  Alt+Tab executed")
+            return True  # Can't verify but assume it worked
         except Exception as e:
-            logger.error(f"  Error focusing Edge: {e}")
-            return False
+            logger.error(f"  Alt+Tab failed: {e}")
+
+        return False
 
     def scroll_down(self, pixels: int = 500, smooth: bool = False):
         """

@@ -30,13 +30,23 @@ from modules.csv_analyzer import CSVAnalyzer
 from modules.dom_extractor import DOMExtractor
 from init_db import init_database
 
-# Configure logging
+# Configure logging - ensure output goes to console
+import sys
 logging.basicConfig(
     level=logging.INFO,
     format=LOG_FORMAT,
-    datefmt=LOG_DATE_FORMAT
+    datefmt=LOG_DATE_FORMAT,
+    stream=sys.stderr,  # Force output to stderr
+    force=True  # Override any existing handlers
 )
 logger = logging.getLogger(__name__)
+
+# Add explicit stream handler to ensure console output
+console_handler = logging.StreamHandler(sys.stderr)
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter(LOG_FORMAT, LOG_DATE_FORMAT))
+logger.addHandler(console_handler)
+logger.setLevel(logging.INFO)
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -51,6 +61,59 @@ _browser = None
 _ocr = None
 _action_executor = None
 _dom_extractor = None
+
+# Progress tracking for real-time monitoring
+_job_progress = {
+    'running': False,
+    'job_id': None,
+    'job_name': None,
+    'step': '',
+    'step_number': 0,
+    'total_steps': 5,
+    'items_extracted': 0,
+    'items_sent': 0,
+    'items_duplicate': 0,
+    'started_at': None,
+    'error': None
+}
+
+
+def update_progress(step: str, step_number: int = 0, **kwargs):
+    """Update job progress for real-time monitoring"""
+    global _job_progress
+    _job_progress['step'] = step
+    if step_number > 0:
+        _job_progress['step_number'] = step_number
+    for key, value in kwargs.items():
+        if key in _job_progress:
+            _job_progress[key] = value
+
+
+def start_progress(job_id: int, job_name: str):
+    """Start tracking progress for a job"""
+    global _job_progress
+    _job_progress = {
+        'running': True,
+        'job_id': job_id,
+        'job_name': job_name,
+        'step': 'Starting...',
+        'step_number': 0,
+        'total_steps': 5,
+        'items_extracted': 0,
+        'items_sent': 0,
+        'items_duplicate': 0,
+        'started_at': datetime.now().isoformat(),
+        'error': None
+    }
+
+
+def end_progress(success: bool = True, error: str = None):
+    """End progress tracking"""
+    global _job_progress
+    _job_progress['running'] = False
+    _job_progress['step'] = 'Completed' if success else 'Failed'
+    if error:
+        _job_progress['error'] = error
 
 
 def get_browser():
@@ -73,7 +136,11 @@ def get_action_executor():
     """Lazy initialization of action executor"""
     global _action_executor
     if _action_executor is None:
-        _action_executor = ActionExecutor(get_browser(), get_ocr())
+        _action_executor = ActionExecutor(
+            browser_controller=get_browser(),
+            ocr_handler=get_ocr(),
+            dom_extractor=get_dom_extractor()  # For browser-native clicks via CDP
+        )
     return _action_executor
 
 
@@ -156,6 +223,17 @@ def edit_dom_job(job_id):
     if not job:
         return redirect(url_for('index'))
     return render_template('dom_job_editor.html', job=job)
+
+
+@app.route('/data')
+def data_viewer():
+    """Data viewer page - view and manage extracted data"""
+    logger.info("Loading data viewer")
+    jobs = db.get_all_jobs()
+    stats = db.get_stats()
+    return render_template('data_viewer.html',
+                         jobs=jobs,
+                         total_records=stats.get('total_extracted_data', 0))
 
 
 # ==================== API ROUTES ====================
@@ -352,21 +430,139 @@ def api_test_telegram():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/test-telegram-with-data', methods=['POST'])
+def api_test_telegram_with_data():
+    """Test Telegram message using extracted data and message template"""
+    data = request.json
+    logger.info("=" * 60)
+    logger.info("TEST TELEGRAM WITH EXTRACTED DATA")
+    logger.info("=" * 60)
+
+    try:
+        bot_token = data.get('telegram_bot_token')
+        chat_id = data.get('telegram_chat_id')
+        format_template = data.get('format_template')
+        extracted_data = data.get('extracted_data', [])
+
+        logger.info(f"  Bot token: {bot_token[:15] if bot_token else 'None'}...")
+        logger.info(f"  Chat ID: {chat_id}")
+        logger.info(f"  Template length: {len(format_template) if format_template else 0} chars")
+        logger.info(f"  Extracted items: {len(extracted_data)}")
+
+        # Validate inputs
+        if not bot_token:
+            return jsonify({'success': False, 'error': 'Bot token required'}), 400
+        if not chat_id:
+            return jsonify({'success': False, 'error': 'Chat ID required'}), 400
+        if not format_template:
+            return jsonify({'success': False, 'error': 'Message format template required'}), 400
+        if not extracted_data or len(extracted_data) == 0:
+            return jsonify({'success': False, 'error': 'No extracted data to send. Run test extraction first.'}), 400
+
+        # Initialize Telegram sender and formatter
+        telegram = TelegramSender(bot_token)
+        formatter = MessageFormatter()
+
+        # Test connection first
+        logger.info("  Testing bot connection...")
+        conn_result = telegram.test_connection()
+        if not conn_result['success']:
+            logger.error(f"  Connection failed: {conn_result['error']}")
+            return jsonify({'success': False, 'error': f"Bot connection failed: {conn_result['error']}"}), 400
+
+        logger.info(f"  Connected as @{conn_result['username']}")
+
+        # Format and send messages
+        # Send first item as a sample, or all items if there are few
+        items_to_send = extracted_data[:3] if len(extracted_data) > 3 else extracted_data
+
+        logger.info(f"  Sending {len(items_to_send)} test message(s)...")
+
+        # Add header to indicate this is a test
+        test_header = "🧪 <b>TEST MESSAGE</b>\n\n"
+
+        messages_sent = []
+        errors = []
+
+        for i, item in enumerate(items_to_send, 1):
+            logger.info(f"  Formatting item {i}...")
+            formatted_message = formatter.format_message(item, format_template)
+            full_message = test_header + formatted_message
+
+            logger.info(f"  Sending message {i}...")
+            send_result = telegram.send_message(chat_id, full_message)
+
+            if send_result['success']:
+                messages_sent.append({
+                    'item_index': i,
+                    'message_id': send_result['message_id'],
+                    'preview': formatted_message[:100] + '...' if len(formatted_message) > 100 else formatted_message
+                })
+                logger.info(f"  ✓ Message {i} sent (ID: {send_result['message_id']})")
+            else:
+                errors.append({
+                    'item_index': i,
+                    'error': send_result['error']
+                })
+                logger.error(f"  ✗ Message {i} failed: {send_result['error']}")
+
+        logger.info("=" * 60)
+        logger.info(f"TEST COMPLETE: {len(messages_sent)}/{len(items_to_send)} messages sent")
+        logger.info("=" * 60)
+
+        return jsonify({
+            'success': len(messages_sent) > 0,
+            'bot_username': conn_result.get('username'),
+            'messages_sent': len(messages_sent),
+            'total_items': len(extracted_data),
+            'messages': messages_sent,
+            'errors': errors if errors else None
+        })
+
+    except Exception as e:
+        logger.error(f"Error testing Telegram with data: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/run-job/<int:job_id>', methods=['POST'])
 def api_run_job(job_id):
-    """Manually trigger job execution"""
+    """Manually trigger job execution with progress tracking"""
     logger.info(f"Manual job execution: {job_id}")
 
     try:
+        # Get job info for progress tracking
+        job = db.get_job(job_id)
+        if not job:
+            return jsonify({'success': False, 'error': 'Job not found'}), 404
+
+        # Start progress tracking
+        start_progress(job_id, job.get('name', f'Job {job_id}'))
+
         # Import engine and run
         from engine import AutomationEngine
         engine = AutomationEngine()
-        engine.execute_job(job_id)
 
-        return jsonify({'success': True, 'message': 'Job executed'})
+        # Pass progress callback to engine
+        engine.set_progress_callback(update_progress)
+
+        try:
+            engine.execute_job(job_id)
+            end_progress(success=True)
+            return jsonify({'success': True, 'message': 'Job executed'})
+        except Exception as e:
+            end_progress(success=False, error=str(e))
+            raise
     except Exception as e:
         logger.error(f"Error running job: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/progress', methods=['GET'])
+def api_get_progress():
+    """Get current job execution progress"""
+    return jsonify(_job_progress)
 
 
 @app.route('/api/job/<int:job_id>/data', methods=['GET'])
@@ -383,6 +579,67 @@ def api_get_job_logs(job_id):
     limit = request.args.get('limit', 50, type=int)
     logs = db.get_execution_logs(job_id, limit=limit)
     return jsonify(logs)
+
+
+# ==================== EXTRACTED DATA API ROUTES ====================
+
+@app.route('/api/extracted-data', methods=['GET'])
+def api_get_extracted_data():
+    """Get all extracted data with optional job filter"""
+    job_id = request.args.get('job_id', type=int)
+    limit = request.args.get('limit', 100, type=int)
+    offset = request.args.get('offset', 0, type=int)
+
+    logger.info(f"Getting extracted data: job_id={job_id}, limit={limit}, offset={offset}")
+
+    try:
+        result = db.get_all_extracted_data(job_id=job_id, limit=limit, offset=offset)
+        return jsonify({
+            'success': True,
+            'data': result['data'],
+            'total': result['total']
+        })
+    except Exception as e:
+        logger.error(f"Error getting extracted data: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/extracted-data/<int:record_id>', methods=['DELETE'])
+def api_delete_extracted_data(record_id):
+    """Delete a single extracted data record"""
+    logger.info(f"Deleting extracted data record: {record_id}")
+
+    try:
+        deleted = db.delete_extracted_data(record_id)
+        if deleted:
+            return jsonify({'success': True})
+        else:
+            return jsonify({'success': False, 'error': 'Record not found'}), 404
+    except Exception as e:
+        logger.error(f"Error deleting extracted data: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/extracted-data/bulk-delete', methods=['POST'])
+def api_bulk_delete_extracted_data():
+    """Delete multiple extracted data records"""
+    data = request.json
+    record_ids = data.get('ids', [])
+
+    logger.info(f"Bulk deleting {len(record_ids)} extracted data records")
+
+    if not record_ids:
+        return jsonify({'success': False, 'error': 'No record IDs provided'}), 400
+
+    try:
+        deleted_count = db.bulk_delete_extracted_data(record_ids)
+        return jsonify({
+            'success': True,
+            'deleted': deleted_count
+        })
+    except Exception as e:
+        logger.error(f"Error bulk deleting extracted data: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/test-action', methods=['POST'])
@@ -615,42 +872,112 @@ def api_test_dom_field():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# Simple ping endpoint to test if server is responding
+@app.route('/api/ping', methods=['GET', 'POST'])
+def api_ping():
+    """Simple test endpoint"""
+    import sys
+    print("=" * 40, flush=True)
+    print("PING RECEIVED!", flush=True)
+    print("=" * 40, flush=True)
+    sys.stdout.flush()
+    return jsonify({'success': True, 'message': 'pong'})
+
+
 @app.route('/api/test-dom-extraction', methods=['POST'])
 def api_test_dom_extraction():
     """Test full DOM extraction with provided configuration"""
-    data = request.json
-    logger.info("Testing DOM extraction")
-    logger.info(f"  URL: {data.get('url')}")
-    logger.info(f"  Selectors: {list(data.get('selectors', {}).keys())}")
+    import sys
+
+    # ==================== EXTENSIVE LOGGING START ====================
+    # Output to BOTH stdout and stderr to ensure visibility
+    msg = "\n" + "=" * 60 + "\n🔴 TEST DOM EXTRACTION API CALLED\n" + "=" * 60
+    print(msg, flush=True)
+    sys.stdout.flush()
+    sys.stderr.write(msg + "\n")
+    sys.stderr.flush()
+
+    logger.info("=" * 60)
+    logger.info("TEST DOM EXTRACTION API CALLED")
+    logger.info("=" * 60)
+
+    # Log request info BEFORE accessing request.json
+    print(f"[STEP 1] Request method: {request.method}", flush=True)
+    print(f"[STEP 1] Request content type: {request.content_type}", flush=True)
+    print(f"[STEP 1] Request content length: {request.content_length}", flush=True)
+    sys.stdout.flush()
+    logger.info(f"[STEP 1] Request method: {request.method}")
+    logger.info(f"[STEP 1] Request content type: {request.content_type}")
+    logger.info(f"[STEP 1] Request content length: {request.content_length}")
+
+    # Now try to get JSON data
+    print("[STEP 2] Attempting to parse request.json...")
+    logger.info("[STEP 2] Attempting to parse request.json...")
 
     try:
+        data = request.json
+        print(f"[STEP 2] SUCCESS - Got JSON data with keys: {list(data.keys()) if data else 'None'}")
+        logger.info(f"[STEP 2] SUCCESS - Got JSON data with keys: {list(data.keys()) if data else 'None'}")
+    except Exception as json_error:
+        print(f"[STEP 2] FAILED - Could not parse JSON: {json_error}")
+        logger.error(f"[STEP 2] FAILED - Could not parse JSON: {json_error}")
+        return jsonify({'success': False, 'error': f'Invalid JSON: {json_error}'}), 400
+
+    print(f"[STEP 3] URL from request: {data.get('url', 'NOT PROVIDED')}")
+    print(f"[STEP 3] Selectors from request: {list(data.get('selectors', {}).keys())}")
+    print(f"[STEP 3] Pre-extraction actions count: {len(data.get('pre_extraction_actions', []))}")
+    print(f"[STEP 3] Wait time: {data.get('wait_time', 2)}")
+    print(f"[STEP 3] Wait for selector: {data.get('wait_for_selector', 'NOT PROVIDED')}")
+    logger.info(f"[STEP 3] URL from request: {data.get('url', 'NOT PROVIDED')}")
+    logger.info(f"[STEP 3] Selectors from request: {list(data.get('selectors', {}).keys())}")
+    logger.info(f"[STEP 3] Pre-extraction actions count: {len(data.get('pre_extraction_actions', []))}")
+    # ==================== EXTENSIVE LOGGING END ====================
+
+    try:
+        print("[STEP 4] Getting DOM extractor...")
+        logger.info("[STEP 4] Getting DOM extractor...")
         extractor = get_dom_extractor()
+        print(f"[STEP 4] SUCCESS - Got extractor: {extractor}")
+        logger.info(f"[STEP 4] SUCCESS - Got extractor: {extractor}")
 
-        # Execute pre-extraction actions if provided
+        # Get pre-extraction actions
         pre_actions = data.get('pre_extraction_actions', [])
+        print(f"[STEP 5] Pre-extraction actions: {len(pre_actions)} action(s)")
+        logger.info(f"[STEP 5] Pre-extraction actions: {len(pre_actions)} action(s)")
         if pre_actions:
-            logger.info(f"  Executing {len(pre_actions)} pre-extraction actions")
-            executor = get_action_executor()
-            browser = get_browser()
-            browser.focus_edge_browser()
-            executor.execute_actions(pre_actions)
+            for i, action in enumerate(pre_actions):
+                print(f"  Action {i+1}: {action.get('type', 'unknown')} - {action}")
+                logger.info(f"  Action {i+1}: {action.get('type', 'unknown')}")
 
-        # Extract data
+        # Extract data - pass pre_extraction_actions to extractor
+        print("[STEP 6] Starting data extraction...")
+        logger.info("[STEP 6] Starting data extraction...")
+
         if data.get('url'):
+            print(f"[STEP 6] Extracting from URL: {data['url']}")
+            logger.info(f"[STEP 6] Extracting from URL: {data['url']}")
             extracted = extractor.extract_data(
                 url=data['url'],
                 selectors=data['selectors'],
                 wait_for_selector=data.get('wait_for_selector'),
-                wait_time=data.get('wait_time', 2)
+                wait_time=data.get('wait_time', 2),
+                pre_extraction_actions=pre_actions  # Pass pre-extraction actions!
             )
         else:
-            # Extract from current page
+            print("[STEP 6] Extracting from CURRENT PAGE (no URL provided)")
+            logger.info("[STEP 6] Extracting from CURRENT PAGE (no URL provided)")
             extracted = extractor.extract_from_current_page(
                 selectors=data['selectors'],
                 wait_time=data.get('wait_time', 2)
             )
 
-        logger.info(f"  Extracted {len(extracted)} items")
+        print(f"[STEP 7] SUCCESS - Extracted {len(extracted)} items")
+        print(f"[STEP 7] Extracted data preview: {extracted[:2] if extracted else 'EMPTY'}")
+        logger.info(f"[STEP 7] SUCCESS - Extracted {len(extracted)} items")
+
+        print("=" * 60)
+        print("TEST DOM EXTRACTION COMPLETED SUCCESSFULLY")
+        print("=" * 60)
 
         return jsonify({
             'success': True,
@@ -658,8 +985,13 @@ def api_test_dom_extraction():
         })
 
     except Exception as e:
+        print("=" * 60)
+        print(f"TEST DOM EXTRACTION FAILED WITH ERROR: {e}")
+        print("=" * 60)
         logger.error(f"Error testing DOM extraction: {e}")
         logger.exception("Full traceback:")
+        import traceback
+        traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -689,38 +1021,57 @@ def api_generate_selectors_ai():
     - Container selector
     - Field selectors for each data field
     """
+    logger.info("=" * 60)
+    logger.info("AI SELECTOR GENERATION REQUEST RECEIVED")
+    logger.info("=" * 60)
+
     try:
+        logger.info("[STEP 1] Parsing request JSON...")
         data = request.json
+        logger.info(f"  Request data keys: {list(data.keys()) if data else 'None'}")
+
         html_block = data.get('html_block', '')
         example_data = data.get('example_data', {})
         api_key = data.get('api_key', '')
 
-        logger.info("AI Selector Generation requested")
-        logger.info(f"  Fields to extract: {list(example_data.keys())}")
+        logger.info("[STEP 2] Extracted values:")
+        logger.info(f"  HTML block length: {len(html_block)} chars")
+        logger.info(f"  Example data fields: {list(example_data.keys()) if example_data else 'None'}")
+        logger.info(f"  API key length: {len(api_key)} chars")
+        logger.info(f"  API key prefix: {api_key[:15]}..." if len(api_key) > 15 else f"  API key: {api_key}")
 
         # Validation
+        logger.info("[STEP 3] Validating inputs...")
         if not html_block:
+            logger.error("  VALIDATION FAILED: No HTML block")
             return jsonify({
                 'success': False,
                 'error': 'HTML block is required'
             }), 400
+        logger.info("  HTML block: OK")
 
         if not example_data:
+            logger.error("  VALIDATION FAILED: No example data")
             return jsonify({
                 'success': False,
                 'error': 'Example data is required'
             }), 400
+        logger.info("  Example data: OK")
 
         if not api_key:
+            logger.error("  VALIDATION FAILED: No API key")
             return jsonify({
                 'success': False,
                 'error': 'Anthropic API key is required'
             }), 400
+        logger.info("  API key: OK")
 
         # Call Anthropic API
+        logger.info("[STEP 4] Initializing Anthropic client...")
         import anthropic
 
         client = anthropic.Anthropic(api_key=api_key)
+        logger.info("  Anthropic client created successfully")
 
         # Build prompt
         prompt = f"""You are a CSS selector expert. Analyze this HTML block and generate CSS selectors.
@@ -758,7 +1109,14 @@ Important:
 - Test that each selector would uniquely identify the element within the container
 - Return ONLY the JSON object, no markdown formatting or explanation"""
 
+        logger.info("[STEP 5] Building prompt completed")
+        logger.info(f"  Prompt length: {len(prompt)} chars")
+
         # Make API call
+        logger.info("[STEP 6] Calling Anthropic API...")
+        logger.info("  Model: claude-sonnet-4-20250514")
+        logger.info("  Max tokens: 2000")
+
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=2000,
@@ -768,28 +1126,42 @@ Important:
             }]
         )
 
+        logger.info("[STEP 7] API response received")
+        logger.info(f"  Response type: {type(message)}")
+        logger.info(f"  Content blocks: {len(message.content)}")
+
         # Parse response
         response_text = message.content[0].text
+        logger.info(f"  Response text length: {len(response_text)} chars")
+        logger.info(f"  Response preview: {response_text[:200]}...")
 
         # Extract JSON from response (handle potential markdown formatting)
+        logger.info("[STEP 8] Parsing JSON from response...")
         import re
         json_match = re.search(r'\{[\s\S]*\}', response_text)
 
         if not json_match:
+            logger.error("  FAILED: Could not find JSON in response")
             raise ValueError("Could not find JSON in AI response")
 
+        logger.info("  JSON pattern found in response")
         response_json = json.loads(json_match.group())
+        logger.info(f"  JSON parsed successfully")
 
         # Validate response structure
+        logger.info("[STEP 9] Validating response structure...")
         if 'container_selector' not in response_json:
+            logger.error("  FAILED: Missing 'container_selector'")
             raise ValueError("Response missing 'container_selector'")
 
         if 'field_selectors' not in response_json:
+            logger.error("  FAILED: Missing 'field_selectors'")
             raise ValueError("Response missing 'field_selectors'")
 
-        logger.info(f"  Generated selectors successfully")
+        logger.info("[STEP 10] SUCCESS - Returning results")
         logger.info(f"  Container: {response_json['container_selector']}")
         logger.info(f"  Fields: {list(response_json['field_selectors'].keys())}")
+        logger.info("=" * 60)
 
         return jsonify({
             'success': True,
@@ -799,12 +1171,12 @@ Important:
 
     except Exception as e:
         error_msg = str(e)
-        # Check for common Anthropic errors
-        if 'anthropic' in error_msg.lower() or 'api' in error_msg.lower():
-            logger.error(f"Anthropic API error: {e}")
-        else:
-            logger.error(f"AI selector generation failed: {e}")
-            logger.exception("Full traceback:")
+        logger.error("=" * 60)
+        logger.error("AI SELECTOR GENERATION FAILED")
+        logger.error("=" * 60)
+        logger.error(f"  Error type: {type(e).__name__}")
+        logger.error(f"  Error message: {error_msg}")
+        logger.exception("Full traceback:")
 
         return jsonify({
             'success': False,
@@ -816,7 +1188,10 @@ Important:
 
 @app.errorhandler(404)
 def not_found(e):
-    return render_template('index.html', error='Page not found'), 404
+    # Return JSON for API requests, simple text for others
+    if request.path.startswith('/api/'):
+        return jsonify({'error': 'Endpoint not found', 'path': request.path}), 404
+    return f"404 Not Found: {request.path}", 404
 
 
 @app.errorhandler(500)
@@ -838,5 +1213,6 @@ if __name__ == '__main__':
     app.run(
         host=FLASK_HOST,
         port=FLASK_PORT,
-        debug=FLASK_DEBUG
+        debug=FLASK_DEBUG,
+        use_reloader=False  # Disable reloader to fix logging issues
     )

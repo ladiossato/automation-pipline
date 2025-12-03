@@ -18,7 +18,27 @@
             <a href="/job/new" class="btn btn-primary">+ New OCR Job</a>
             <a href="/dom-job/new" class="btn btn-secondary">+ New DOM Job</a>
             <a href="/csv-job/new" class="btn btn-secondary">+ New CSV Job</a>
+            <a href="/data" class="btn">View Data</a>
         </nav>
+
+        <!-- Progress Monitor -->
+        <section id="progress-monitor" class="progress-section" style="display: none;">
+            <div class="progress-card">
+                <div class="progress-header">
+                    <h3 id="progress-title">Running Job...</h3>
+                    <span id="progress-step" class="progress-step">Step 0/5</span>
+                </div>
+                <div class="progress-bar-container">
+                    <div id="progress-bar" class="progress-bar" style="width: 0%"></div>
+                </div>
+                <div id="progress-status" class="progress-status">Starting...</div>
+                <div class="progress-stats">
+                    <span id="progress-extracted">Extracted: 0</span>
+                    <span id="progress-sent">Sent: 0</span>
+                    <span id="progress-duplicates">Duplicates: 0</span>
+                </div>
+            </div>
+        </section>
 
         <!-- Stats -->
         <section class="stats-grid">
@@ -129,6 +149,8 @@
     </div>
 
     <script>
+        let progressInterval = null;
+
         async function toggleJob(jobId) {
             try {
                 const response = await fetch(`/api/job/${jobId}/toggle`, { method: 'POST' });
@@ -146,17 +168,108 @@
         async function runJob(jobId) {
             if (!confirm('Run this job now?')) return;
 
+            // Show progress monitor
+            showProgressMonitor();
+
             try {
+                // Start the job (this returns when job completes)
                 const response = await fetch(`/api/run-job/${jobId}`, { method: 'POST' });
                 const data = await response.json();
+
+                // Stop progress polling
+                stopProgressMonitor();
+
                 if (data.success) {
-                    alert('Job executed successfully!');
-                    location.reload();
+                    // Show completion in progress monitor briefly
+                    updateProgressUI({
+                        running: false,
+                        step: 'Completed!',
+                        step_number: 5,
+                        total_steps: 5
+                    });
+                    setTimeout(() => {
+                        location.reload();
+                    }, 1500);
                 } else {
-                    alert('Error: ' + data.error);
+                    updateProgressUI({
+                        running: false,
+                        step: 'Failed: ' + data.error,
+                        error: data.error
+                    });
+                    setTimeout(() => {
+                        hideProgressMonitor();
+                        alert('Error: ' + data.error);
+                    }, 2000);
                 }
             } catch (e) {
+                stopProgressMonitor();
+                hideProgressMonitor();
                 alert('Error running job: ' + e.message);
+            }
+        }
+
+        function showProgressMonitor() {
+            document.getElementById('progress-monitor').style.display = 'block';
+            // Start polling for progress updates
+            progressInterval = setInterval(pollProgress, 500);
+        }
+
+        function hideProgressMonitor() {
+            document.getElementById('progress-monitor').style.display = 'none';
+        }
+
+        function stopProgressMonitor() {
+            if (progressInterval) {
+                clearInterval(progressInterval);
+                progressInterval = null;
+            }
+        }
+
+        async function pollProgress() {
+            try {
+                const response = await fetch('/api/progress');
+                const progress = await response.json();
+                updateProgressUI(progress);
+            } catch (e) {
+                console.error('Error polling progress:', e);
+            }
+        }
+
+        function updateProgressUI(progress) {
+            // Update title
+            const title = document.getElementById('progress-title');
+            if (progress.job_name) {
+                title.textContent = `Running: ${progress.job_name}`;
+            }
+
+            // Update step indicator
+            const stepEl = document.getElementById('progress-step');
+            stepEl.textContent = `Step ${progress.step_number}/${progress.total_steps}`;
+
+            // Update progress bar
+            const bar = document.getElementById('progress-bar');
+            const percent = (progress.step_number / progress.total_steps) * 100;
+            bar.style.width = `${percent}%`;
+
+            // Update status text
+            const status = document.getElementById('progress-status');
+            status.textContent = progress.step || 'Processing...';
+
+            // Update stats
+            document.getElementById('progress-extracted').textContent = `Extracted: ${progress.items_extracted || 0}`;
+            document.getElementById('progress-sent').textContent = `Sent: ${progress.items_sent || 0}`;
+            document.getElementById('progress-duplicates').textContent = `Duplicates: ${progress.items_duplicate || 0}`;
+
+            // Update styling based on state
+            const card = document.querySelector('.progress-card');
+            if (progress.error) {
+                card.classList.add('error');
+                card.classList.remove('success');
+            } else if (!progress.running && progress.step === 'Completed!') {
+                card.classList.add('success');
+                card.classList.remove('error');
+            } else {
+                card.classList.remove('error', 'success');
             }
         }
 
@@ -175,6 +288,20 @@
                 alert('Error deleting job: ' + e.message);
             }
         }
+
+        // Check for running job on page load
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                const response = await fetch('/api/progress');
+                const progress = await response.json();
+                if (progress.running) {
+                    showProgressMonitor();
+                    updateProgressUI(progress);
+                }
+            } catch (e) {
+                console.error('Error checking progress:', e);
+            }
+        });
     </script>
 </body>
 </html>

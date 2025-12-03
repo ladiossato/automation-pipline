@@ -338,6 +338,87 @@ class Database:
         logger.info(f"  ✓ Found {len(data)} records")
         return data
 
+    def get_all_extracted_data(
+        self,
+        job_id: int = None,
+        limit: int = 100,
+        offset: int = 0
+    ) -> Dict[str, Any]:
+        """Get all extracted data with optional job filter, includes job name"""
+        logger.info(f"Getting all extracted data (job_id={job_id}, limit={limit})")
+
+        cursor = self.conn.cursor()
+
+        # Build query with optional job filter
+        if job_id:
+            cursor.execute("""
+                SELECT ed.*, j.name as job_name
+                FROM extracted_data ed
+                LEFT JOIN jobs j ON ed.job_id = j.id
+                WHERE ed.job_id = ?
+                ORDER BY ed.extracted_at DESC
+                LIMIT ? OFFSET ?
+            """, (job_id, limit, offset))
+        else:
+            cursor.execute("""
+                SELECT ed.*, j.name as job_name
+                FROM extracted_data ed
+                LEFT JOIN jobs j ON ed.job_id = j.id
+                ORDER BY ed.extracted_at DESC
+                LIMIT ? OFFSET ?
+            """, (limit, offset))
+
+        rows = cursor.fetchall()
+        data = []
+        for row in rows:
+            record = dict(row)
+            try:
+                record['data'] = json.loads(record['data'])
+            except (json.JSONDecodeError, TypeError):
+                pass  # Keep as-is if not valid JSON
+            data.append(record)
+
+        # Get total count
+        if job_id:
+            cursor.execute("SELECT COUNT(*) FROM extracted_data WHERE job_id = ?", (job_id,))
+        else:
+            cursor.execute("SELECT COUNT(*) FROM extracted_data")
+        total = cursor.fetchone()[0]
+
+        logger.info(f"  ✓ Found {len(data)} records (total: {total})")
+        return {'data': data, 'total': total}
+
+    def delete_extracted_data(self, record_id: int) -> bool:
+        """Delete a single extracted data record by ID"""
+        logger.info(f"Deleting extracted data record {record_id}")
+
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM extracted_data WHERE id = ?", (record_id,))
+        self.conn.commit()
+
+        deleted = cursor.rowcount > 0
+        if deleted:
+            logger.info(f"  ✓ Record {record_id} deleted")
+        else:
+            logger.warning(f"  Record {record_id} not found")
+        return deleted
+
+    def bulk_delete_extracted_data(self, record_ids: List[int]) -> int:
+        """Delete multiple extracted data records by IDs"""
+        logger.info(f"Bulk deleting {len(record_ids)} extracted data records")
+
+        if not record_ids:
+            return 0
+
+        cursor = self.conn.cursor()
+        placeholders = ','.join('?' * len(record_ids))
+        cursor.execute(f"DELETE FROM extracted_data WHERE id IN ({placeholders})", record_ids)
+        self.conn.commit()
+
+        deleted = cursor.rowcount
+        logger.info(f"  ✓ Deleted {deleted} records")
+        return deleted
+
     def cleanup_old_data(self, job_id: int, retention_days: int) -> int:
         """Delete data older than retention period"""
         logger.info(f"Cleaning up old data for job {job_id}")

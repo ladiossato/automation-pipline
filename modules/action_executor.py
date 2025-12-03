@@ -27,16 +27,18 @@ logger = logging.getLogger(__name__)
 class ActionExecutor:
     """Executes pre-extraction actions before OCR capture"""
 
-    def __init__(self, browser_controller=None, ocr_handler=None):
+    def __init__(self, browser_controller=None, ocr_handler=None, dom_extractor=None):
         """
         Initialize action executor
 
         Args:
             browser_controller: BrowserController instance for screenshots
             ocr_handler: OCRHandler instance for text detection
+            dom_extractor: DOMExtractor instance for browser-native clicks via CDP
         """
         self.browser = browser_controller
         self.ocr = ocr_handler
+        self.dom_extractor = dom_extractor
         logger.info("ActionExecutor initialized")
 
     def set_browser(self, browser_controller):
@@ -46,6 +48,10 @@ class ActionExecutor:
     def set_ocr(self, ocr_handler):
         """Set OCR handler (for lazy initialization)"""
         self.ocr = ocr_handler
+
+    def set_dom_extractor(self, dom_extractor):
+        """Set DOM extractor (for browser-native clicks)"""
+        self.dom_extractor = dom_extractor
 
     def execute_actions(self, actions: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -144,15 +150,23 @@ class ActionExecutor:
             return {'success': False, 'error': f'Unknown action type: {action_type}'}
 
     def _click_coordinates(self, action: Dict[str, Any]) -> Dict[str, Any]:
-        """Click at specific screen coordinates"""
+        """
+        Click at specific coordinates using pyautogui (most reliable method).
+
+        pyautogui performs actual physical mouse movement and click which works
+        on all websites, unlike CDP/JavaScript clicks which can be blocked.
+        """
         x = action.get('x', 0)
         y = action.get('y', 0)
         wait_after = action.get('wait_after', 2)
         clicks = action.get('clicks', 1)
 
-        logger.info(f"  Clicking at ({x}, {y})")
+        logger.info(f"  Clicking at ({x}, {y}) using pyautogui...")
 
+        # Use pyautogui for reliable physical click
+        # This moves the actual mouse cursor and performs a real click
         pyautogui.click(x, y, clicks=clicks)
+        logger.info(f"  ✓ Click executed at ({x}, {y})")
 
         if wait_after > 0:
             logger.info(f"  Waiting {wait_after}s...")
@@ -211,9 +225,11 @@ class ActionExecutor:
                 center_y = int((bbox[0][1] + bbox[2][1]) / 2) + offset_y
 
                 logger.info(f"  Found '{text}' at ({center_x}, {center_y}) [conf: {conf*100:.1f}%]")
-                logger.info(f"  Clicking...")
+                logger.info(f"  Clicking using pyautogui...")
 
+                # Use pyautogui for reliable physical click
                 pyautogui.click(center_x, center_y)
+                logger.info(f"  ✓ Click executed at ({center_x}, {center_y})")
 
                 if wait_after > 0:
                     logger.info(f"  Waiting {wait_after}s...")
@@ -243,17 +259,33 @@ class ActionExecutor:
         return {'success': True, 'duration': duration}
 
     def _scroll(self, action: Dict[str, Any]) -> Dict[str, Any]:
-        """Scroll the page"""
+        """Scroll the page using browser-native scrolling when available"""
         direction = action.get('direction', 'down')
         amount = action.get('amount', 300)
         wait_after = action.get('wait_after', 1)
 
         logger.info(f"  Scrolling {direction} by {amount}px")
 
-        if direction == 'down':
-            pyautogui.scroll(-amount // 100)  # pyautogui uses clicks, not pixels
-        elif direction == 'up':
-            pyautogui.scroll(amount // 100)
+        # Try browser-native scroll first
+        if self.dom_extractor and self.dom_extractor._connected:
+            try:
+                # Use JavaScript to scroll the page
+                scroll_amount = amount if direction == 'down' else -amount
+                js_code = f"window.scrollBy(0, {scroll_amount})"
+                self.dom_extractor._execute_js(js_code)
+                logger.info(f"  ✓ Browser-native scroll executed")
+            except Exception as e:
+                logger.warning(f"  Browser-native scroll failed, using pyautogui: {e}")
+                if direction == 'down':
+                    pyautogui.scroll(-amount // 100)
+                elif direction == 'up':
+                    pyautogui.scroll(amount // 100)
+        else:
+            # Fallback to pyautogui
+            if direction == 'down':
+                pyautogui.scroll(-amount // 100)  # pyautogui uses clicks, not pixels
+            elif direction == 'up':
+                pyautogui.scroll(amount // 100)
 
         if wait_after > 0:
             logger.info(f"  Waiting {wait_after}s...")

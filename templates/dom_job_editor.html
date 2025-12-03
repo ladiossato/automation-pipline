@@ -145,7 +145,7 @@ Use the exact field names you want in your Telegram message.'></textarea>
                         </small>
                     </div>
 
-                    <button type="button" onclick="generateSelectorsWithAI()" class="btn-primary btn-large">
+                    <button type="button" onclick="console.log('BUTTON CLICKED!'); generateSelectorsWithAI();" class="btn-primary btn-large" id="aiGenerateBtn">
                         Generate Selectors with AI
                     </button>
 
@@ -196,10 +196,16 @@ Use the exact field names you want in your Telegram message.'></textarea>
                 <p class="help-text">
                     Test your selectors before saving. Make sure the target page is open in your browser.
                 </p>
-                <button type="button" onclick="testDomExtraction()" class="btn-warning">
-                    Test Extraction Now
-                </button>
+                <div class="test-buttons">
+                    <button type="button" onclick="event.preventDefault(); event.stopPropagation(); console.log('TEST BUTTON CLICKED'); testDomExtraction(); return false;" class="btn-warning">
+                        Test Extraction Now
+                    </button>
+                    <button type="button" id="testTelegramBtn" onclick="event.preventDefault(); event.stopPropagation(); testTelegramWithData(); return false;" class="btn-success" style="display: none;">
+                        📱 Test Telegram Message
+                    </button>
+                </div>
                 <div id="testResults"></div>
+                <div id="telegramTestResults"></div>
             </section>
 
             <!-- Message Format -->
@@ -246,6 +252,59 @@ New Item Detected
                                {{ 'checked' if not job or job.enable_deduplication else '' }}>
                         Only send new data (skip duplicates)
                     </label>
+                </div>
+            </section>
+
+            <!-- AI Data Transformation -->
+            <section class="form-section">
+                <h2>AI Data Transformation (Optional)</h2>
+                <p class="help-text">
+                    Use Claude AI to intelligently transform raw extracted data into clean, formatted one-liners.
+                    When enabled, AI replaces the Message Format template above.
+                </p>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="enable_ai_transform" name="enable_ai_transform"
+                               {{ 'checked' if job and job.dom_config and job.dom_config.anthropic_api_key else '' }}
+                               onchange="toggleAiTransformSettings()">
+                        Enable AI Data Transformation
+                    </label>
+                </div>
+
+                <div id="aiTransformSettings" style="display: {{ 'block' if job and job.dom_config and job.dom_config.anthropic_api_key else 'none' }};">
+                    <div class="form-group">
+                        <label for="ai_transform_api_key">Anthropic API Key:</label>
+                        <input type="password" id="ai_transform_api_key" name="ai_transform_api_key"
+                               value="{{ job.dom_config.anthropic_api_key if job and job.dom_config else '' }}"
+                               placeholder="sk-ant-api03-...">
+                        <small class="help-text">
+                            This key is stored securely and used to call Claude API for data transformation.
+                            Get one at: <a href="https://console.anthropic.com" target="_blank" style="color: var(--primary-color);">console.anthropic.com</a>
+                        </small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ai_transform_prompt">Custom Transformation Prompt (Optional):</label>
+                        <textarea id="ai_transform_prompt" name="ai_transform_prompt" rows="6"
+                                  placeholder="Leave empty to use default format:
+MM/DD HH:MMam/pm | Error Type | Item Name | Amount
+
+Or provide your own instructions for how to format the data.">{{ job.dom_config.ai_transform_prompt if job and job.dom_config else '' }}</textarea>
+                        <small class="help-text">
+                            Default format: <code>12/02 10:46pm | Missing item | Sweet Shoyu Tofu Bowl | -$8.96</code>
+                        </small>
+                    </div>
+
+                    <div class="ai-transform-preview">
+                        <strong>Example transformation:</strong>
+                        <div class="preview-box">
+                            <div class="preview-label">Input (raw data):</div>
+                            <code>{"amount": "-$8.96", "customer": "Shikha G.", "date": "10:46pm Dec 2, 2025", "error_type": "Missing item", "order_item": "1 x Sweet Shoyu Tofu Rice Bowl"}</code>
+                            <div class="preview-label" style="margin-top: 8px;">Output (AI transformed):</div>
+                            <code>12/02 10:46pm | Missing item | Sweet Shoyu Tofu Bowl | -$8.96</code>
+                        </div>
+                    </div>
                 </div>
             </section>
 
@@ -323,7 +382,9 @@ New Item Detected
     <script>
         // Wait for DOM to be ready before initializing
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('DOM Job Editor initializing...');
+            console.log('='.repeat(50));
+            console.log('DOM JOB EDITOR INITIALIZING...');
+            console.log('='.repeat(50));
 
             // Initialize with existing pre-extraction actions if editing
             {% if job and job.pre_extraction_actions %}
@@ -357,8 +418,24 @@ New Item Detected
                 console.error('updateFieldSelectorsList not defined!');
             }
 
+            // VERIFICATION: Check if AI selector function is available
+            console.log('='.repeat(50));
+            console.log('FUNCTION AVAILABILITY CHECK:');
+            console.log('  generateSelectorsWithAI:', typeof generateSelectorsWithAI === 'function' ? 'AVAILABLE' : 'NOT FOUND');
+            console.log('  applyAISelectors:', typeof applyAISelectors === 'function' ? 'AVAILABLE' : 'NOT FOUND');
+            console.log('  regenerateSelectors:', typeof regenerateSelectors === 'function' ? 'AVAILABLE' : 'NOT FOUND');
+            console.log('  escapeHtml:', typeof escapeHtml === 'function' ? 'AVAILABLE' : 'NOT FOUND');
+            console.log('='.repeat(50));
+
+            // Check for AI button and results div
+            const aiBtn = document.getElementById('aiGenerateBtn');
+            const aiResults = document.getElementById('aiResults');
+            console.log('AI ELEMENTS CHECK:');
+            console.log('  aiGenerateBtn:', aiBtn ? 'FOUND' : 'NOT FOUND');
+            console.log('  aiResults:', aiResults ? 'FOUND' : 'NOT FOUND');
+            console.log('='.repeat(50));
+
             console.log('DOM Job Editor ready!');
-            console.log('showAddActionModal available:', typeof showAddActionModal === 'function');
         });
     </script>
 </body>

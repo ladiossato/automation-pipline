@@ -34,16 +34,31 @@ from init_db import init_database
 # Ensure logs directory exists
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Configure logging
+# Configure logging with immediate flush
+file_handler = logging.FileHandler(LOGS_DIR / 'engine.log', encoding='utf-8')
+stream_handler = logging.StreamHandler(sys.stdout)
+
+# Create a custom formatter
+formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
+file_handler.setFormatter(formatter)
+stream_handler.setFormatter(formatter)
+
+# Configure root logger
 logging.basicConfig(
     level=logging.INFO,
-    format=LOG_FORMAT,
-    datefmt=LOG_DATE_FORMAT,
-    handlers=[
-        logging.FileHandler(LOGS_DIR / 'engine.log', encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
-    ]
+    handlers=[file_handler, stream_handler]
 )
+
+# Force stream handler to flush after each log
+class FlushingStreamHandler(logging.StreamHandler):
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
+
+# Replace the stream handler with flushing version
+logging.root.handlers = [file_handler, FlushingStreamHandler(sys.stdout)]
+logging.root.handlers[1].setFormatter(formatter)
+
 logger = logging.getLogger(__name__)
 
 
@@ -71,6 +86,9 @@ class AutomationEngine:
         self._dom_extractor = None
         self.formatter = MessageFormatter()
 
+        # Progress callback for real-time monitoring
+        self._progress_callback = None
+
         # Initialize scheduler
         self.scheduler = BackgroundScheduler()
         self.scheduler.start()
@@ -78,6 +96,15 @@ class AutomationEngine:
 
         logger.info("  Engine ready")
         logger.info("=" * 70)
+
+    def set_progress_callback(self, callback):
+        """Set callback function for progress updates"""
+        self._progress_callback = callback
+
+    def _update_progress(self, step: str, step_number: int = 0, **kwargs):
+        """Update progress if callback is set"""
+        if self._progress_callback:
+            self._progress_callback(step, step_number, **kwargs)
 
     @property
     def browser(self):
@@ -104,7 +131,11 @@ class AutomationEngine:
     def action_executor(self):
         """Lazy initialization of action executor"""
         if self._action_executor is None:
-            self._action_executor = ActionExecutor(self.browser, self.ocr)
+            self._action_executor = ActionExecutor(
+                browser_controller=self.browser,
+                ocr_handler=self.ocr,
+                dom_extractor=self.dom_extractor  # For browser-native clicks via CDP
+            )
         return self._action_executor
 
     @property
@@ -119,13 +150,8 @@ class AutomationEngine:
         """Lazy initialization of DOM extractor"""
         if self._dom_extractor is None:
             self._dom_extractor = DOMExtractor()
-            # Connect to browser with Edge profile
-            import os
-            edge_profile = os.path.join(
-                os.path.expanduser('~'),
-                'AppData', 'Local', 'Microsoft', 'Edge', 'User Data'
-            )
-            self._dom_extractor.connect_to_browser(edge_profile)
+            # Don't connect here - let extract_data handle connection with the URL
+            # This allows Edge to open directly to the target page
         return self._dom_extractor
 
     def execute_job(self, job_id: int):
@@ -458,10 +484,14 @@ class AutomationEngine:
 
         try:
             dom_config = job.get('dom_config', {})
+            url = dom_config.get('url', job.get('url'))
+            selectors = dom_config.get('selectors', {})
+            pre_actions = job.get('pre_extraction_actions', [])
+
             logger.info(f"Job: {job['name']}")
-            logger.info(f"URL: {dom_config.get('url', job.get('url'))}")
-            logger.info(f"Selectors: {list(dom_config.get('selectors', {}).keys())}")
-            logger.info(f"Pre-extraction actions: {len(job.get('pre_extraction_actions', []))}")
+            logger.info(f"URL: {url}")
+            logger.info(f"Selectors: {list(selectors.keys())}")
+            logger.info(f"Pre-extraction actions: {len(pre_actions)}")
 
             # Initialize Telegram if configured
             telegram = None
@@ -469,45 +499,166 @@ class AutomationEngine:
                 telegram = TelegramSender(job['telegram_bot_token'])
                 logger.info("  Telegram configured")
 
-            # Step 1: Execute pre-extraction actions if any
-            pre_actions = job.get('pre_extraction_actions', [])
+            # STEP 1: Connect to browser and navigate to URL FIRST
+            # This is CRITICAL - browser must be open before pre-extraction actions
+            self._update_progress("Connecting to browser...", step_number=1)
+            logger.info("\n[STEP 1] Connecting to browser and loading page")
+            logger.info(f"  Target URL: {url}")
+
+            # Connect to browser (will launch Edge with debugging if needed)
+            # Pass the URL so Edge opens directly to the target page
+            logger.info("  [DEBUG] About to call connect_to_browser()...")
+            sys.stdout.flush()
+
+            connection_result = self.dom_extractor.connect_to_browser(url=url)
+
+            logger.info(f"  [DEBUG] connect_to_browser returned: {connection_result}")
+            sys.stdout.flush()
+
+            if not connection_result:
+                raise RuntimeError("Failed to connect to browser")
+
+            logger.info("  ✓ Browser connected and page loaded")
+            sys.stdout.flush()
+
+            # Extra wait for page to fully render (dynamic content)
+            logger.info("  [DEBUG] About to update progress and wait 3s...")
+            sys.stdout.flush()
+
+            self._update_progress("Loading page...", step_number=1)
+            logger.info("  Waiting 3s for page to fully render...")
+            sys.stdout.flush()
+
+            time.sleep(3)
+            logger.info("  ✓ Page render wait complete")
+            sys.stdout.flush()
+
+            # STEP 2: Execute pre-extraction actions AFTER page is loaded
+            logger.info(f"\n  [DEBUG] Checking pre_actions: {len(pre_actions)} actions configured")
+            sys.stdout.flush()
+
             if pre_actions:
-                logger.info(f"\n[STEP 1] Executing {len(pre_actions)} pre-extraction actions")
-                self.browser.focus_edge_browser()
-                time.sleep(1)
-                action_result = self.action_executor.execute_actions(pre_actions)
-                if not action_result.get('success', True):
-                    logger.warning("Some pre-extraction actions failed, continuing anyway...")
-                logger.info("Pre-extraction actions complete")
+                logger.info(f"  [DEBUG] Entering STEP 2 block...")
+                sys.stdout.flush()
 
-            # Step 2: Extract data from DOM
-            logger.info("\n[STEP 2] Extracting data from DOM")
-            url = dom_config.get('url', job.get('url'))
-            selectors = dom_config.get('selectors', {})
+                self._update_progress(f"Executing {len(pre_actions)} pre-actions...", step_number=2)
+                logger.info(f"\n[STEP 2] Executing {len(pre_actions)} pre-extraction actions AFTER page load")
+                sys.stdout.flush()
+                logger.info(f"  Actions to execute: {pre_actions}")
+                sys.stdout.flush()
 
-            if url:
-                extracted_data = self.dom_extractor.extract_data(
-                    url=url,
-                    selectors=selectors,
-                    wait_for_selector=dom_config.get('wait_for_selector'),
-                    wait_time=dom_config.get('wait_time', 2)
-                )
+                # Wait a bit longer for Edge window to be fully ready
+                # This is important when Edge was just started - it needs time to register window handle
+                logger.info("  Waiting 2s for Edge window to be fully ready...")
+                time.sleep(2)
+
+                # Focus browser window for pyautogui clicks (with retry logic)
+                logger.info("  Focusing browser window...")
+                focus_result = False
+                for focus_attempt in range(3):
+                    try:
+                        focus_result = self.browser.focus_edge_browser(timeout=5.0, max_retries=3)
+                        if focus_result:
+                            logger.info(f"  ✓ Browser focused successfully on attempt {focus_attempt + 1}")
+                            break
+                        else:
+                            logger.warning(f"  Focus attempt {focus_attempt + 1}/3 failed, retrying...")
+                            time.sleep(1)
+                    except Exception as e:
+                        logger.warning(f"  Focus attempt {focus_attempt + 1}/3 error: {e}")
+                        time.sleep(1)
+
+                if not focus_result:
+                    logger.error("  ❌ CRITICAL: Could not focus Edge browser!")
+                    logger.error("     Pre-extraction clicks will likely fail.")
+                    logger.error("     Make sure Edge is visible and not minimized.")
+                else:
+                    time.sleep(0.5)  # Brief wait after successful focus
+                logger.info("  ✓ Browser focus step complete")
+
+                # Execute actions with detailed logging
+                logger.info("  Calling action_executor.execute_actions()...")
+                try:
+                    action_result = self.action_executor.execute_actions(pre_actions)
+                    logger.info(f"  Action result: {action_result}")
+                    if not action_result.get('success', True):
+                        logger.warning("  Some pre-extraction actions failed, continuing anyway...")
+                except Exception as e:
+                    logger.error(f"  Action execution failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+                logger.info("  ✓ Pre-extraction actions complete")
+
+                # Wait for dynamic content to load after actions
+                logger.info("  Waiting 2s for dynamic content after actions...")
+                time.sleep(2)
+                logger.info("  ✓ Dynamic content wait complete")
             else:
-                extracted_data = self.dom_extractor.extract_from_current_page(
-                    selectors=selectors,
-                    wait_time=dom_config.get('wait_time', 2)
+                logger.info("\n[STEP 2] No pre-extraction actions configured")
+
+            # STEP 3: Extract data from DOM
+            self._update_progress("Extracting data from DOM...", step_number=3)
+            logger.info("\n[STEP 3] Extracting data from DOM")
+
+            # Extract from current page (already navigated in Step 1)
+            # Don't pass URL again - we're already on the page
+            extracted_data = self.dom_extractor.extract_from_current_page(
+                selectors=selectors,
+                wait_time=dom_config.get('wait_time', 2)
+            )
+
+            logger.info(f"  Extracted {len(extracted_data)} items")
+            self._update_progress(f"Extracted {len(extracted_data)} items", step_number=3, items_extracted=len(extracted_data))
+
+            # CRITICAL VALIDATION: Fail if 0 items extracted
+            if len(extracted_data) == 0:
+                logger.error("")
+                logger.error("=" * 60)
+                logger.error("❌ EXTRACTION FAILURE: 0 items extracted")
+                logger.error("=" * 60)
+                logger.error("  Possible causes:")
+                logger.error("    - Wrong CSS selectors")
+                logger.error("    - Pre-extraction action didn't work (wrong coordinates?)")
+                logger.error("    - Page content not loaded")
+                logger.error("    - Container selector doesn't match any elements")
+                logger.error("")
+                logger.error("  Debug steps:")
+                logger.error("    1. Open the URL manually in Edge")
+                logger.error("    2. Run 'Test Extraction' in the job editor")
+                logger.error("    3. Check if pre-action coordinates are correct")
+                logger.error("=" * 60)
+
+                # Log execution as FAILED
+                self.db.complete_execution_log(
+                    log_id=log_id,
+                    status='failed',
+                    items_extracted=0,
+                    items_new=0,
+                    items_duplicate=0,
+                    error_message="Extraction returned 0 items - check selectors and pre-actions"
                 )
 
-            logger.info(f"Extracted {len(extracted_data)} items")
+                raise RuntimeError("Extraction validation failed: 0 items extracted")
 
-            # Step 3: Process each item (deduplication + Telegram)
-            logger.info(f"\n[STEP 3] Processing data (deduplication + Telegram)")
+            # STEP 4: Process each item (deduplication + Telegram)
+            self._update_progress(f"Processing {len(extracted_data)} items...", step_number=4)
+            logger.info(f"\n[STEP 4] Processing {len(extracted_data)} items (deduplication + Telegram)")
             new_count = 0
             dup_count = 0
             sent_count = 0
 
+            # Log all extracted items first for debugging
+            logger.info("\n--- EXTRACTED ITEMS PREVIEW ---")
             for i, data in enumerate(extracted_data, 1):
+                preview = {k: str(v)[:30] + '...' if len(str(v)) > 30 else v for k, v in data.items()}
+                logger.info(f"  Item {i}: {preview}")
+            logger.info("--- END PREVIEW ---\n")
+
+            for i, data in enumerate(extracted_data, 1):
+                self._update_progress(f"Processing item {i}/{len(extracted_data)}...", step_number=4,
+                                      items_sent=sent_count, items_duplicate=dup_count)
                 logger.info(f"\n[Item {i}/{len(extracted_data)}]")
+                logger.info(f"  Data: {data}")
 
                 if not data or all(not v for v in data.values()):
                     logger.warning("  Skipping empty data point")
@@ -516,25 +667,53 @@ class AutomationEngine:
                 # Check deduplication if enabled
                 if job.get('enable_deduplication', True):
                     result = self.dedup.process_item(job_id, data)
+                    logger.info(f"  Hash: {result['hash']}")
 
                     if not result['is_new']:
                         dup_count += 1
-                        logger.info("  Duplicate - skipping")
+                        logger.info("  Status: DUPLICATE - skipping Telegram")
+                        self._update_progress(f"Item {i} is duplicate", step_number=4,
+                                              items_duplicate=dup_count)
                         continue
 
                     # Store new data
                     record_id = self.dedup.store_and_mark(job_id, result)
+                    logger.info(f"  Status: NEW - stored with ID {record_id}")
                 else:
                     # Store without dedup check
                     data_hash = self.dedup.generate_hash(data)
                     record_id = self.db.store_extracted_data(job_id, data, data_hash)
+                    logger.info(f"  Status: STORED (no dedup) with ID {record_id}")
 
                 new_count += 1
-                logger.info("  NEW - stored")
 
                 # Send to Telegram
                 if telegram and job.get('format_template'):
-                    message = self.formatter.format_message(data, job['format_template'])
+                    self._update_progress(f"Sending item {i} to Telegram...", step_number=4)
+
+                    # Check if AI transformation is enabled (Anthropic API key configured)
+                    anthropic_api_key = dom_config.get('anthropic_api_key', '')
+
+                    if anthropic_api_key:
+                        # Use Claude API to transform data into clean one-liner
+                        logger.info("  Using AI transformation...")
+                        transform_result = telegram.transform_data_with_ai(
+                            raw_data=data,
+                            api_key=anthropic_api_key,
+                            custom_prompt=dom_config.get('ai_transform_prompt')  # Optional custom prompt
+                        )
+
+                        if transform_result['success']:
+                            message = transform_result['transformed_text']
+                            logger.info(f"  AI transformed: {message}")
+                        else:
+                            # Fallback to template formatting if AI fails
+                            logger.warning(f"  AI transformation failed: {transform_result['error']}")
+                            logger.info("  Falling back to template formatting")
+                            message = self.formatter.format_message(data, job['format_template'])
+                    else:
+                        # Use traditional template formatting
+                        message = self.formatter.format_message(data, job['format_template'])
 
                     send_result = telegram.send_message(
                         job['telegram_chat_id'],
@@ -545,6 +724,8 @@ class AutomationEngine:
                         sent_count += 1
                         self.db.mark_sent_to_telegram(record_id, send_result['message_id'])
                         logger.info("  Sent to Telegram")
+                        self._update_progress(f"Sent {sent_count} items to Telegram", step_number=4,
+                                              items_sent=sent_count)
                     else:
                         logger.error(f"  Telegram error: {send_result['error']}")
 

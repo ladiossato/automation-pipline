@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Extracted Data - Automation Platform</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        .data-controls {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .data-controls select,
+        .data-controls input {
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg-card);
+            color: var(--text);
+        }
+
+        .data-table-container {
+            overflow-x: auto;
+            background: var(--bg-card);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        .data-table th,
+        .data-table td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .data-table th {
+            background: var(--bg-darker);
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+        }
+
+        .data-table tr:hover {
+            background: var(--bg-hover);
+        }
+
+        .data-table td {
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .data-table td:hover {
+            white-space: normal;
+            word-break: break-word;
+        }
+
+        .data-table .actions-cell {
+            width: 100px;
+            text-align: center;
+        }
+
+        .btn-delete {
+            background: var(--danger);
+            color: white;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .btn-delete:hover {
+            background: #dc2626;
+        }
+
+        .checkbox-cell {
+            width: 40px;
+            text-align: center;
+        }
+
+        .bulk-actions {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            padding: 12px 16px;
+            background: var(--bg-darker);
+            border-radius: 8px;
+            margin-bottom: 16px;
+        }
+
+        .bulk-actions.hidden {
+            display: none;
+        }
+
+        .selected-count {
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .pagination {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+            margin-top: 20px;
+            align-items: center;
+        }
+
+        .pagination button {
+            padding: 8px 16px;
+        }
+
+        .pagination .page-info {
+            padding: 8px 16px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+
+        .empty-state h3 {
+            margin-bottom: 8px;
+        }
+
+        .stats-row {
+            display: flex;
+            gap: 24px;
+            margin-bottom: 20px;
+        }
+
+        .stat-item {
+            background: var(--bg-card);
+            padding: 16px 24px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+
+        .stat-item .value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .stat-item .label {
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Extracted Data</h1>
+            <p class="subtitle">View and manage extracted data from all jobs</p>
+        </header>
+
+        <nav>
+            <a href="/">Dashboard</a>
+            <a href="/job/new">+ New OCR Job</a>
+            <a href="/csv-job/new">+ New CSV Job</a>
+            <a href="/dom-job/new">+ New DOM Job</a>
+            <a href="/data" class="active">View Data</a>
+        </nav>
+
+        <!-- Stats -->
+        <div class="stats-row">
+            <div class="stat-item">
+                <div class="value" id="totalRecords">{{ total_records }}</div>
+                <div class="label">Total Records</div>
+            </div>
+            <div class="stat-item">
+                <div class="value" id="totalJobs">{{ jobs|length }}</div>
+                <div class="label">Jobs with Data</div>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="data-controls">
+            <label>
+                Job:
+                <select id="jobFilter" onchange="loadData()">
+                    <option value="">All Jobs</option>
+                    {% for job in jobs %}
+                    <option value="{{ job.id }}">{{ job.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                Search:
+                <input type="text" id="searchInput" placeholder="Search data..." onkeyup="filterTable()">
+            </label>
+
+            <label>
+                Show:
+                <select id="limitSelect" onchange="loadData()">
+                    <option value="50">50 rows</option>
+                    <option value="100" selected>100 rows</option>
+                    <option value="500">500 rows</option>
+                    <option value="1000">1000 rows</option>
+                </select>
+            </label>
+
+            <button class="btn" onclick="loadData()">Refresh</button>
+        </div>
+
+        <!-- Bulk Actions -->
+        <div class="bulk-actions hidden" id="bulkActions">
+            <span class="selected-count"><span id="selectedCount">0</span> selected</span>
+            <button class="btn-delete" onclick="deleteSelected()">Delete Selected</button>
+            <button class="btn" onclick="clearSelection()">Clear Selection</button>
+        </div>
+
+        <!-- Data Table -->
+        <div class="data-table-container">
+            <table class="data-table" id="dataTable">
+                <thead>
+                    <tr>
+                        <th class="checkbox-cell">
+                            <input type="checkbox" id="selectAll" onchange="toggleSelectAll()">
+                        </th>
+                        <th>ID</th>
+                        <th>Job</th>
+                        <th>Data</th>
+                        <th>Extracted At</th>
+                        <th class="actions-cell">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="dataBody">
+                    <!-- Data rows will be inserted here -->
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Empty State -->
+        <div class="empty-state hidden" id="emptyState">
+            <h3>No Data Found</h3>
+            <p>Run a job to start extracting data, or adjust your filters.</p>
+        </div>
+
+        <!-- Pagination -->
+        <div class="pagination" id="pagination">
+            <button class="btn" onclick="prevPage()" id="prevBtn" disabled>Previous</button>
+            <span class="page-info">Page <span id="currentPage">1</span> of <span id="totalPages">1</span></span>
+            <button class="btn" onclick="nextPage()" id="nextBtn">Next</button>
+        </div>
+    </div>
+
+    <script>
+        let currentData = [];
+        let selectedIds = new Set();
+        let currentPage = 1;
+        let pageSize = 100;
+        let totalRecords = 0;
+
+        // Load data on page load
+        document.addEventListener('DOMContentLoaded', loadData);
+
+        async function loadData() {
+            const jobFilter = document.getElementById('jobFilter').value;
+            const limit = document.getElementById('limitSelect').value;
+            pageSize = parseInt(limit);
+
+            let url = `/api/extracted-data?limit=${limit}`;
+            if (jobFilter) {
+                url += `&job_id=${jobFilter}`;
+            }
+
+            try {
+                const response = await fetch(url);
+                const result = await response.json();
+
+                if (result.success) {
+                    currentData = result.data;
+                    totalRecords = result.total || result.data.length;
+                    document.getElementById('totalRecords').textContent = totalRecords;
+                    currentPage = 1;
+                    renderTable();
+                } else {
+                    console.error('Failed to load data:', result.error);
+                }
+            } catch (error) {
+                console.error('Error loading data:', error);
+            }
+        }
+
+        function renderTable() {
+            const tbody = document.getElementById('dataBody');
+            const emptyState = document.getElementById('emptyState');
+            const tableContainer = document.querySelector('.data-table-container');
+
+            if (currentData.length === 0) {
+                tbody.innerHTML = '';
+                emptyState.classList.remove('hidden');
+                tableContainer.style.display = 'none';
+                document.getElementById('pagination').style.display = 'none';
+                return;
+            }
+
+            emptyState.classList.add('hidden');
+            tableContainer.style.display = 'block';
+            document.getElementById('pagination').style.display = 'flex';
+
+            // Calculate pagination
+            const totalPages = Math.ceil(currentData.length / pageSize);
+            const start = (currentPage - 1) * pageSize;
+            const end = start + pageSize;
+            const pageData = currentData.slice(start, end);
+
+            document.getElementById('currentPage').textContent = currentPage;
+            document.getElementById('totalPages').textContent = totalPages;
+            document.getElementById('prevBtn').disabled = currentPage <= 1;
+            document.getElementById('nextBtn').disabled = currentPage >= totalPages;
+
+            tbody.innerHTML = pageData.map(row => {
+                const dataPreview = formatDataPreview(row.data);
+                const isSelected = selectedIds.has(row.id);
+
+                return `
+                    <tr data-id="${row.id}">
+                        <td class="checkbox-cell">
+                            <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="toggleSelect(${row.id})">
+                        </td>
+                        <td>${row.id}</td>
+                        <td>${escapeHtml(row.job_name || 'Unknown')}</td>
+                        <td title="${escapeHtml(JSON.stringify(row.data))}">${dataPreview}</td>
+                        <td>${formatDate(row.extracted_at)}</td>
+                        <td class="actions-cell">
+                            <button class="btn-delete" onclick="deleteRecord(${row.id})">Delete</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            updateBulkActions();
+        }
+
+        function formatDataPreview(data) {
+            if (!data) return '-';
+
+            if (typeof data === 'string') {
+                try {
+                    data = JSON.parse(data);
+                } catch (e) {
+                    return escapeHtml(data.substring(0, 100));
+                }
+            }
+
+            // Show key fields
+            const preview = [];
+            const priorityKeys = ['customer', 'name', 'amount', 'title', 'error_type', 'description'];
+
+            for (const key of priorityKeys) {
+                if (data[key]) {
+                    preview.push(`<strong>${key}:</strong> ${escapeHtml(String(data[key]).substring(0, 30))}`);
+                    if (preview.length >= 3) break;
+                }
+            }
+
+            if (preview.length === 0) {
+                // Fallback to first few keys
+                const keys = Object.keys(data).slice(0, 3);
+                for (const key of keys) {
+                    preview.push(`<strong>${key}:</strong> ${escapeHtml(String(data[key]).substring(0, 30))}`);
+                }
+            }
+
+            return preview.join(' | ') || JSON.stringify(data).substring(0, 50);
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return '-';
+            const date = new Date(dateStr);
+            return date.toLocaleString();
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function filterTable() {
+            const search = document.getElementById('searchInput').value.toLowerCase();
+            const rows = document.querySelectorAll('#dataBody tr');
+
+            rows.forEach(row => {
+                const text = row.textContent.toLowerCase();
+                row.style.display = text.includes(search) ? '' : 'none';
+            });
+        }
+
+        function toggleSelect(id) {
+            if (selectedIds.has(id)) {
+                selectedIds.delete(id);
+            } else {
+                selectedIds.add(id);
+            }
+            updateBulkActions();
+        }
+
+        function toggleSelectAll() {
+            const selectAll = document.getElementById('selectAll').checked;
+            const checkboxes = document.querySelectorAll('#dataBody input[type="checkbox"]');
+
+            checkboxes.forEach(cb => {
+                const row = cb.closest('tr');
+                const id = parseInt(row.dataset.id);
+                cb.checked = selectAll;
+
+                if (selectAll) {
+                    selectedIds.add(id);
+                } else {
+                    selectedIds.delete(id);
+                }
+            });
+
+            updateBulkActions();
+        }
+
+        function clearSelection() {
+            selectedIds.clear();
+            document.getElementById('selectAll').checked = false;
+            document.querySelectorAll('#dataBody input[type="checkbox"]').forEach(cb => cb.checked = false);
+            updateBulkActions();
+        }
+
+        function updateBulkActions() {
+            const bulkActions = document.getElementById('bulkActions');
+            const count = selectedIds.size;
+
+            document.getElementById('selectedCount').textContent = count;
+
+            if (count > 0) {
+                bulkActions.classList.remove('hidden');
+            } else {
+                bulkActions.classList.add('hidden');
+            }
+        }
+
+        async function deleteRecord(id) {
+            if (!confirm('Are you sure you want to delete this record?')) return;
+
+            try {
+                const response = await fetch(`/api/extracted-data/${id}`, {
+                    method: 'DELETE'
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    // Remove from current data
+                    currentData = currentData.filter(r => r.id !== id);
+                    selectedIds.delete(id);
+                    renderTable();
+                } else {
+                    alert('Failed to delete: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error deleting record: ' + error.message);
+            }
+        }
+
+        async function deleteSelected() {
+            if (selectedIds.size === 0) return;
+
+            if (!confirm(`Are you sure you want to delete ${selectedIds.size} record(s)?`)) return;
+
+            try {
+                const response = await fetch('/api/extracted-data/bulk-delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids: Array.from(selectedIds) })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    // Remove from current data
+                    currentData = currentData.filter(r => !selectedIds.has(r.id));
+                    selectedIds.clear();
+                    renderTable();
+                } else {
+                    alert('Failed to delete: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error deleting records: ' + error.message);
+            }
+        }
+
+        function prevPage() {
+            if (currentPage > 1) {
+                currentPage--;
+                renderTable();
+            }
+        }
+
+        function nextPage() {
+            const totalPages = Math.ceil(currentData.length / pageSize);
+            if (currentPage < totalPages) {
+                currentPage++;
+                renderTable();
+            }
+        }
+    </script>
+</body>
+</html>

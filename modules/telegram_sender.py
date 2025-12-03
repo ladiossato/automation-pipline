@@ -1,12 +1,14 @@
 """
 Telegram Sender Module
-Handles sending messages to Telegram chats/channels
+Handles sending messages to Telegram chats/channels using direct HTTP requests
+Includes AI-powered data transformation using Claude API
 """
 
-import asyncio
 import logging
+import requests
+import json
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -22,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class TelegramSender:
-    """Handles Telegram message sending with error handling"""
+    """Handles Telegram message sending with direct HTTP requests (no async issues)"""
 
     def __init__(self, bot_token: str):
         """
@@ -34,51 +36,10 @@ class TelegramSender:
         logger.info("Initializing Telegram bot")
         logger.info(f"  Token: {bot_token[:15]}...{bot_token[-5:]}")
 
-        from telegram import Bot
-        self.bot = Bot(token=bot_token)
         self.token = bot_token
+        self.base_url = f"https://api.telegram.org/bot{bot_token}"
 
-        logger.info("  Telegram bot initialized")
-
-    async def _send_message_async(
-        self,
-        chat_id: str,
-        message: str,
-        parse_mode: str = 'HTML'
-    ) -> Dict[str, Any]:
-        """
-        Internal async method to send message
-
-        Args:
-            chat_id: Telegram chat/channel ID
-            message: Message text
-            parse_mode: 'HTML' or 'Markdown'
-
-        Returns:
-            Dict with {success, message_id, error}
-        """
-        try:
-            result = await self.bot.send_message(
-                chat_id=chat_id,
-                text=message,
-                parse_mode=parse_mode
-            )
-
-            return {
-                'success': True,
-                'message_id': str(result.message_id),
-                'error': None
-            }
-
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"  Telegram error: {error_msg}")
-
-            return {
-                'success': False,
-                'message_id': None,
-                'error': error_msg
-            }
+        logger.info("  Telegram bot initialized (using direct HTTP)")
 
     def send_message(
         self,
@@ -87,7 +48,7 @@ class TelegramSender:
         parse_mode: str = 'HTML'
     ) -> Dict[str, Any]:
         """
-        Send message to Telegram chat/channel (sync wrapper)
+        Send message to Telegram chat/channel using direct HTTP request
 
         Args:
             chat_id: Telegram chat/channel ID (e.g., '-100123456789')
@@ -105,60 +66,65 @@ class TelegramSender:
         logger.info(f"  Parse mode: {parse_mode}")
         logger.info(f"  Preview: {message[:100]}...")
 
-        # Run async method in event loop
         try:
-            # Try to get existing event loop
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If loop is already running, create a new one in a thread
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(
-                        asyncio.run,
-                        self._send_message_async(chat_id, message, parse_mode)
-                    )
-                    result = future.result()
-            else:
-                result = loop.run_until_complete(
-                    self._send_message_async(chat_id, message, parse_mode)
-                )
-        except RuntimeError:
-            # No event loop, create one
-            result = asyncio.run(
-                self._send_message_async(chat_id, message, parse_mode)
-            )
-
-        if result['success']:
-            logger.info(f"  Message sent successfully")
-            logger.info(f"  Message ID: {result['message_id']}")
-        else:
-            logger.error(f"  Failed to send: {result['error']}")
-
-        logger.info("=" * 50)
-
-        return result
-
-    async def _test_connection_async(self) -> Dict[str, Any]:
-        """Test bot connection by getting bot info"""
-        try:
-            bot_info = await self.bot.get_me()
-            return {
-                'success': True,
-                'username': bot_info.username,
-                'name': bot_info.first_name,
-                'error': None
+            url = f"{self.base_url}/sendMessage"
+            payload = {
+                'chat_id': chat_id,
+                'text': message,
+                'parse_mode': parse_mode
             }
-        except Exception as e:
+
+            response = requests.post(url, json=payload, timeout=30)
+            data = response.json()
+
+            if data.get('ok'):
+                message_id = str(data['result']['message_id'])
+                logger.info(f"  Message sent successfully")
+                logger.info(f"  Message ID: {message_id}")
+                logger.info("=" * 50)
+                return {
+                    'success': True,
+                    'message_id': message_id,
+                    'error': None
+                }
+            else:
+                error_msg = data.get('description', 'Unknown error')
+                logger.error(f"  Telegram API error: {error_msg}")
+                logger.info("=" * 50)
+                return {
+                    'success': False,
+                    'message_id': None,
+                    'error': error_msg
+                }
+
+        except requests.exceptions.Timeout:
+            logger.error(f"  Request timeout")
+            logger.info("=" * 50)
             return {
                 'success': False,
-                'username': None,
-                'name': None,
+                'message_id': None,
+                'error': 'Request timeout'
+            }
+        except requests.exceptions.RequestException as e:
+            logger.error(f"  Request error: {e}")
+            logger.info("=" * 50)
+            return {
+                'success': False,
+                'message_id': None,
+                'error': str(e)
+            }
+        except Exception as e:
+            logger.error(f"  Unexpected error: {e}")
+            logger.info("=" * 50)
+            return {
+                'success': False,
+                'message_id': None,
                 'error': str(e)
             }
 
     def test_connection(self) -> Dict[str, Any]:
         """
-        Test bot connection
+        Test bot connection by getting bot info
 
         Returns:
             Dict with {success, username, name, error}
@@ -166,18 +132,39 @@ class TelegramSender:
         logger.info("Testing Telegram bot connection...")
 
         try:
-            result = asyncio.run(self._test_connection_async())
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(self._test_connection_async())
+            url = f"{self.base_url}/getMe"
+            response = requests.get(url, timeout=10)
+            data = response.json()
 
-        if result['success']:
-            logger.info(f"  Connected as @{result['username']} ({result['name']})")
-        else:
-            logger.error(f"  Connection failed: {result['error']}")
+            if data.get('ok'):
+                bot_info = data['result']
+                username = bot_info.get('username', 'unknown')
+                name = bot_info.get('first_name', 'unknown')
+                logger.info(f"  Connected as @{username} ({name})")
+                return {
+                    'success': True,
+                    'username': username,
+                    'name': name,
+                    'error': None
+                }
+            else:
+                error_msg = data.get('description', 'Unknown error')
+                logger.error(f"  Connection failed: {error_msg}")
+                return {
+                    'success': False,
+                    'username': None,
+                    'name': None,
+                    'error': error_msg
+                }
 
-        return result
+        except Exception as e:
+            logger.error(f"  Connection failed: {e}")
+            return {
+                'success': False,
+                'username': None,
+                'name': None,
+                'error': str(e)
+            }
 
     def test_send(self, chat_id: str) -> Dict[str, Any]:
         """
@@ -199,6 +186,117 @@ class TelegramSender:
         )
 
         return self.send_message(chat_id, message)
+
+    def transform_data_with_ai(
+        self,
+        raw_data: Dict[str, Any],
+        api_key: str,
+        custom_prompt: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Use Claude API to intelligently transform raw extracted data into clean format
+
+        Args:
+            raw_data: Dictionary of extracted field values
+            api_key: Anthropic API key
+            custom_prompt: Optional custom transformation prompt
+
+        Returns:
+            Dict with {success, transformed_text, error}
+        """
+        logger.info("=" * 50)
+        logger.info("AI DATA TRANSFORMATION")
+        logger.info("=" * 50)
+        logger.info(f"  Raw data fields: {list(raw_data.keys())}")
+
+        if not api_key:
+            logger.error("  No Anthropic API key provided")
+            return {
+                'success': False,
+                'transformed_text': None,
+                'error': 'No API key provided'
+            }
+
+        # Build the transformation prompt
+        if custom_prompt:
+            prompt = custom_prompt
+        else:
+            prompt = """Transform this raw extracted data into a clean, concise one-liner for a Telegram notification.
+
+Format: MM/DD HH:MMam/pm | Error Type | Item Name (shortened) | Amount
+
+Rules:
+- Extract date and format as MM/DD HH:MMam/pm
+- Use the error_type field as-is
+- Shorten long item names (e.g., "1 x Sweet Shoyu Tofu Rice Bowl" → "Sweet Shoyu Tofu Bowl")
+- Keep the amount with $ sign
+- Use | as separator
+- NO extra text, just the formatted line
+
+Example input:
+{"amount": "-$8.96", "customer": "Shikha G.", "date": "10:46pm Dec 2, 2025", "description": "No salad...", "error_type": "Missing item", "order_item": "1 x Sweet Shoyu Tofu Rice Bowl"}
+
+Example output:
+12/02 10:46pm | Missing item | Sweet Shoyu Tofu Bowl | -$8.96"""
+
+        try:
+            url = "https://api.anthropic.com/v1/messages"
+            headers = {
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            }
+
+            payload = {
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 150,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"{prompt}\n\nData to transform:\n{json.dumps(raw_data, indent=2)}"
+                    }
+                ]
+            }
+
+            logger.info("  Calling Claude API...")
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            data = response.json()
+
+            if response.status_code == 200 and data.get('content'):
+                transformed = data['content'][0]['text'].strip()
+                logger.info(f"  Transformed: {transformed}")
+                logger.info("=" * 50)
+                return {
+                    'success': True,
+                    'transformed_text': transformed,
+                    'error': None
+                }
+            else:
+                error_msg = data.get('error', {}).get('message', f'API error: {response.status_code}')
+                logger.error(f"  API error: {error_msg}")
+                logger.info("=" * 50)
+                return {
+                    'success': False,
+                    'transformed_text': None,
+                    'error': error_msg
+                }
+
+        except requests.exceptions.Timeout:
+            logger.error("  API request timeout")
+            logger.info("=" * 50)
+            return {
+                'success': False,
+                'transformed_text': None,
+                'error': 'API request timeout'
+            }
+        except Exception as e:
+            logger.error(f"  Transformation error: {e}")
+            logger.info("=" * 50)
+            return {
+                'success': False,
+                'transformed_text': None,
+                'error': str(e)
+            }
 
 
 class MessageFormatter:

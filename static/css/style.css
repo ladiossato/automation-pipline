@@ -128,6 +128,29 @@ nav a.active {
     color: white;
 }
 
+.btn-warning {
+    background: #f59e0b;
+    border-color: #f59e0b;
+    color: white;
+}
+
+.btn-warning:hover {
+    background: #d97706;
+    border-color: #d97706;
+}
+
+/* Test buttons container */
+.test-buttons {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.test-buttons button {
+    min-width: 180px;
+}
+
 .btn-small {
     padding: 4px 10px;
     font-size: 12px;
@@ -1205,4 +1228,157 @@ kbd {
 .field-selector-row input[readonly] {
     background: var(--bg-hover);
     cursor: not-allowed;
+}
+
+/* Progress Monitor */
+.progress-section {
+    margin-bottom: 20px;
+}
+
+.progress-card {
+    background: var(--bg-card);
+    border: 1px solid var(--primary);
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0 0 15px var(--primary-glow);
+}
+
+.progress-card.success {
+    border-color: var(--success);
+    box-shadow: 0 0 15px rgba(34, 197, 94, 0.3);
+}
+
+.progress-card.error {
+    border-color: var(--danger);
+    box-shadow: 0 0 15px rgba(239, 68, 68, 0.3);
+}
+
+.progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.progress-header h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.progress-step {
+    font-size: 13px;
+    color: var(--text-secondary);
+    background: var(--bg-hover);
+    padding: 4px 10px;
+    border-radius: 4px;
+}
+
+.progress-bar-container {
+    background: var(--bg-input);
+    height: 8px;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 12px;
+}
+
+.progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--primary), var(--primary-dark));
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+
+.progress-card.success .progress-bar {
+    background: linear-gradient(90deg, var(--success), #16a34a);
+}
+
+.progress-card.error .progress-bar {
+    background: linear-gradient(90deg, var(--danger), #dc2626);
+}
+
+.progress-status {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+}
+
+.progress-stats {
+    display: flex;
+    gap: 20px;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.progress-stats span {
+    background: var(--bg-input);
+    padding: 4px 10px;
+    border-radius: 4px;
+}
+
+/* ==================== AI Data Transformation ==================== */
+
+.ai-transform-preview {
+    margin-top: 20px;
+    background: var(--bg-input);
+    border-radius: 8px;
+    padding: 16px;
+    border-left: 4px solid var(--primary);
+}
+
+.ai-transform-preview strong {
+    display: block;
+    margin-bottom: 12px;
+    color: var(--text-primary);
+}
+
+.preview-box {
+    background: var(--bg-dark);
+    padding: 12px;
+    border-radius: 6px;
+}
+
+.preview-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+.preview-box code {
+    display: block;
+    font-family: 'Courier New', Consolas, monospace;
+    font-size: 12px;
+    color: #67e8f9;
+    background: none;
+    padding: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+#aiTransformSettings {
+    margin-top: 16px;
+    padding-left: 24px;
+    border-left: 3px solid var(--border);
+}
+
+#aiTransformSettings .form-group {
+    margin-bottom: 16px;
+}
+
+#aiTransformSettings input[type="password"],
+#aiTransformSettings textarea {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+#aiTransformSettings textarea {
+    font-family: 'Courier New', Consolas, monospace;
+    font-size: 13px;
+    resize: vertical;
 }
