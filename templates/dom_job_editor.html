@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% if job %}Edit{% else %}New{% endif %} DOM Extraction Job - Automation Platform</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="{{ 'dark-mode' if dark_mode else '' }}">
+    <div class="container">
+        <header>
+            <h1>{% if job %}Edit{% else %}New{% endif %} DOM Extraction Job</h1>
+            <p class="subtitle">Extract data using CSS selectors</p>
+        </header>
+
+        <nav>
+            <a href="/">Dashboard</a>
+            <a href="/job/new">+ New OCR Job</a>
+            <a href="/csv-job/new">+ New CSV Job</a>
+            <a href="/dom-job/new" class="active">+ New DOM Job</a>
+        </nav>
+
+        <div class="system-note">
+            <strong>How DOM Extraction Works:</strong>
+            <p>This job type extracts data directly from HTML elements using CSS selectors.
+            You define a "container" selector that matches each repeating item (row/card),
+            then field selectors relative to each container.</p>
+        </div>
+
+        <form id="domJobForm" onsubmit="saveDomJob(event)">
+            <input type="hidden" id="job_id" value="{{ job.id if job else '' }}">
+            <input type="hidden" name="job_type" value="dom_extraction">
+
+            <!-- Basic Settings -->
+            <section class="form-section">
+                <h2>Basic Settings</h2>
+
+                <div class="form-group">
+                    <label for="name">Job Name:</label>
+                    <input type="text" id="name" name="name" required
+                           value="{{ job.name if job else '' }}"
+                           placeholder="e.g., Error Charges Monitor, Product Tracker">
+                </div>
+
+                <div class="form-group">
+                    <label for="url">Page URL:</label>
+                    <input type="url" id="url" name="url" required
+                           value="{{ job.dom_config.url if job and job.dom_config else '' }}"
+                           placeholder="https://example.com/your-page">
+                    <span class="help-text">The page where data will be extracted from</span>
+                </div>
+            </section>
+
+            <!-- Pre-Extraction Actions -->
+            <section class="form-section">
+                <h2>Pre-Extraction Actions</h2>
+                <p class="section-help">Define actions to execute before extracting data (e.g., click a tab, button, or menu item to reach the correct view)</p>
+
+                <div id="actionsList" class="actions-list">
+                    <!-- Actions will be rendered here -->
+                </div>
+
+                <div class="action-buttons">
+                    <button type="button" class="btn" onclick="showAddActionModal()">
+                        + Add Action
+                    </button>
+                    <button type="button" class="btn" onclick="testAllActions()" id="testAllActionsBtn" style="display: none;">
+                        Test All Actions
+                    </button>
+                </div>
+            </section>
+
+            <!-- Screen Capture for Coordinate Picking -->
+            <section class="form-section">
+                <h2>Screen Capture (for Coordinate Actions)</h2>
+                <p class="section-help">Capture the screen to visually pick coordinates for click actions</p>
+
+                <div class="capture-controls">
+                    <button type="button" class="btn btn-primary" onclick="captureScreen()">
+                        Capture Current Screen
+                    </button>
+                    <span id="captureStatus"></span>
+                </div>
+
+                <div id="screenPreview" class="screen-preview">
+                    <p class="placeholder-text">Click "Capture Screen" to enable coordinate picking</p>
+                </div>
+            </section>
+
+            <!-- Data Extraction Configuration -->
+            <section class="form-section">
+                <h2>Data Extraction Configuration</h2>
+
+                <!-- AI-Assisted Generation (PRIMARY METHOD) -->
+                <div class="ai-selector-generator">
+                    <h3>AI-Assisted Selector Generation</h3>
+                    <p class="help-text">
+                        The fastest way to configure extraction. AI analyzes your HTML and automatically generates CSS selectors.
+                    </p>
+
+                    <div class="form-group">
+                        <label>Step 1: Copy HTML Block</label>
+                        <textarea id="htmlBlock" rows="10"
+                                  placeholder="Paste the HTML for ONE complete item from your page.
+
+How to get it:
+1. On your target page, right-click an item
+2. Select 'Inspect' (opens DevTools)
+3. In DevTools, find the outer element that contains ALL the data you want
+4. Right-click that element
+5. Copy → Copy outerHTML
+6. Paste here"></textarea>
+                        <small class="help-text">
+                            Example: If you have multiple error charges, copy the HTML for just ONE error charge
+                        </small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Step 2: Provide Example Data</label>
+                        <textarea id="exampleData" rows="8"
+                                  placeholder='Enter the ACTUAL text values you see in that HTML above.
+
+Example:
+{
+  "customer": "Lauren R.",
+  "amount": "-$2.51",
+  "error_type": "Incorrect size",
+  "order_item": "1x Crispy Jalapeno Herb Aioli Chicken Rice Bowl",
+  "description": "Received a small bowl. I ordered a large..."
+}
+
+Use the exact field names you want in your Telegram message.'></textarea>
+                        <small class="help-text">
+                            The AI will match these values to elements in the HTML and generate selectors
+                        </small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Step 3: Anthropic API Key</label>
+                        <input type="password" id="anthropicApiKey"
+                               placeholder="sk-ant-api03-...">
+                        <small class="help-text">
+                            Your API key is only used for this request and is never stored.
+                            Get one at: <a href="https://console.anthropic.com" target="_blank" style="color: white;">console.anthropic.com</a>
+                        </small>
+                    </div>
+
+                    <button type="button" onclick="generateSelectorsWithAI()" class="btn-primary btn-large">
+                        Generate Selectors with AI
+                    </button>
+
+                    <div id="aiResults" class="ai-results"></div>
+                </div>
+
+                <!-- Advanced: Manual Selector Configuration (hidden by default) -->
+                <details class="manual-selectors-section">
+                    <summary><strong>Advanced: Manual Selector Configuration</strong></summary>
+                    <p class="help-text">Only use this if AI generation fails or you need custom selectors.</p>
+
+                    <div class="form-group">
+                        <label for="selector_container">Container Selector:</label>
+                        <input type="text" id="selector_container" name="selector_container"
+                               value="{{ job.dom_config.selectors.container if job and job.dom_config and job.dom_config.selectors else '' }}"
+                               placeholder="e.g., div.item, .data-row">
+                    </div>
+
+                    <div id="fieldSelectorsList">
+                        <!-- Field selectors will be added here -->
+                    </div>
+
+                    <button type="button" onclick="addFieldSelector()" class="btn-secondary">
+                        + Add Field
+                    </button>
+                </details>
+
+                <!-- Wait Settings -->
+                <div class="form-group" style="margin-top: 24px;">
+                    <label for="wait_for_selector">Wait for Selector (optional):</label>
+                    <input type="text" id="wait_for_selector" name="wait_for_selector"
+                           value="{{ job.dom_config.wait_for_selector if job and job.dom_config else '' }}"
+                           placeholder="e.g., .data-loaded (waits for this element before extracting)">
+                </div>
+
+                <div class="form-group">
+                    <label for="wait_time">Wait Time (seconds):</label>
+                    <input type="number" id="wait_time" name="wait_time"
+                           value="{{ job.dom_config.wait_time if job and job.dom_config else 2 }}"
+                           min="0" max="30">
+                    <small class="help-text">Additional wait for dynamic content to load</small>
+                </div>
+            </section>
+
+            <!-- Test Extraction -->
+            <section class="form-section test-section">
+                <h2>Test Extraction</h2>
+                <p class="help-text">
+                    Test your selectors before saving. Make sure the target page is open in your browser.
+                </p>
+                <button type="button" onclick="testDomExtraction()" class="btn-warning">
+                    Test Extraction Now
+                </button>
+                <div id="testResults"></div>
+            </section>
+
+            <!-- Message Format -->
+            <section class="form-section">
+                <h2>Message Format</h2>
+                <p class="help-text">
+                    Use <code>{field_name}</code> placeholders to insert extracted data.
+                    Use the field names you defined above.
+                </p>
+
+                <textarea id="format_template" name="format_template" rows="6" required
+                          placeholder="Example:
+New Item Detected
+
+{field1}: {field2}
+{field3}
+
+---">{{ job.format_template if job else '' }}</textarea>
+
+                <div id="formatPreview" class="format-preview"></div>
+            </section>
+
+            <!-- Telegram Configuration -->
+            <section class="form-section">
+                <h2>Telegram Alerts</h2>
+
+                <div class="form-group">
+                    <label for="telegram_bot_token">Bot Token:</label>
+                    <input type="text" id="telegram_bot_token" name="telegram_bot_token" required
+                           value="{{ job.telegram_bot_token if job else '' }}"
+                           placeholder="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz">
+                </div>
+
+                <div class="form-group">
+                    <label for="telegram_chat_id">Chat ID:</label>
+                    <input type="text" id="telegram_chat_id" name="telegram_chat_id" required
+                           value="{{ job.telegram_chat_id if job else '' }}"
+                           placeholder="-1001234567890">
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="enable_deduplication" name="enable_deduplication"
+                               {{ 'checked' if not job or job.enable_deduplication else '' }}>
+                        Only send new data (skip duplicates)
+                    </label>
+                </div>
+            </section>
+
+            <!-- Schedule -->
+            <section class="form-section">
+                <h2>Schedule</h2>
+
+                <div class="form-group">
+                    <label for="schedule_interval_hours">Run Every:</label>
+                    <input type="number" id="schedule_interval_hours" name="schedule_interval_hours"
+                           value="{{ job.schedule_interval_hours if job else 2 }}"
+                           min="1" max="168" required>
+                    <span>hours</span>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="active" name="active"
+                               {{ 'checked' if job and job.active else '' }}>
+                        Activate job immediately
+                    </label>
+                </div>
+            </section>
+
+            <!-- Save -->
+            <div class="form-actions">
+                <button type="submit" class="btn-primary">
+                    Save DOM Job
+                </button>
+                <a href="/" class="btn-secondary">Cancel</a>
+            </div>
+        </form>
+    </div>
+
+    <!-- Action Modal -->
+    <div id="actionModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="actionModalTitle">Add Action</h3>
+                <button type="button" class="modal-close" onclick="closeActionModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="actionType">Action Type</label>
+                    <select id="actionType" onchange="updateActionForm()">
+                        <option value="click_coordinates">Click at Coordinates</option>
+                        <option value="click_ocr">Click Element by Text (OCR)</option>
+                        <option value="wait">Wait (seconds)</option>
+                        <option value="scroll">Scroll Page</option>
+                        <option value="press_key">Press Keyboard Key</option>
+                    </select>
+                </div>
+
+                <div id="actionFormFields">
+                    <!-- Dynamic form fields will be inserted here -->
+                </div>
+
+                <div class="form-group">
+                    <label for="actionWaitAfter">Wait After Action (seconds)</label>
+                    <input type="number" id="actionWaitAfter" value="2" min="0" step="0.5">
+                    <small>Time to wait after this action completes</small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" onclick="closeActionModal()">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="testCurrentAction()">Test Action</button>
+                <button type="button" class="btn btn-success" onclick="saveAction()">Save Action</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/region_selector.js"></script>
+    <script src="/static/js/action_editor.js"></script>
+    <script src="/static/js/dom_job_editor.js"></script>
+    <script>
+        // Wait for DOM to be ready before initializing
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM Job Editor initializing...');
+
+            // Initialize with existing pre-extraction actions if editing
+            {% if job and job.pre_extraction_actions %}
+            preExtractionActions = {{ job.pre_extraction_actions | tojson | safe }};
+            console.log('Loaded pre-extraction actions:', preExtractionActions.length);
+            {% endif %}
+
+            {% if job and job.dom_config and job.dom_config.selectors %}
+            // Initialize field selectors from existing config
+            const existingSelectors = {{ job.dom_config.selectors | tojson | safe }};
+            Object.entries(existingSelectors).forEach(([name, selector]) => {
+                if (name !== 'container') {
+                    fieldSelectors.push({ name, selector });
+                }
+            });
+            console.log('Loaded field selectors:', fieldSelectors.length);
+            {% endif %}
+
+            // Initialize UI
+            if (typeof updateActionsList === 'function') {
+                updateActionsList();
+                console.log('Actions list updated');
+            } else {
+                console.error('updateActionsList not defined!');
+            }
+
+            if (typeof updateFieldSelectorsList === 'function') {
+                updateFieldSelectorsList();
+                console.log('Field selectors list updated');
+            } else {
+                console.error('updateFieldSelectorsList not defined!');
+            }
+
+            console.log('DOM Job Editor ready!');
+            console.log('showAddActionModal available:', typeof showAddActionModal === 'function');
+        });
+    </script>
+</body>
+</html>

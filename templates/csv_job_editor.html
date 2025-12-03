@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ 'Edit' if job else 'New' }} CSV Analysis Job - Automation Platform</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>{{ 'Edit' if job else 'New' }} CSV Analysis Job</h1>
+            <p class="subtitle">Configure CSV download and prep time analysis</p>
+        </header>
+
+        <nav>
+            <a href="/">Dashboard</a>
+            <a href="/job/new">New OCR Job</a>
+            <a href="/csv-job/new" class="{{ 'active' if not job else '' }}">New CSV Job</a>
+        </nav>
+
+        <form id="csvJobForm" class="job-form">
+            <!-- Basic Settings -->
+            <section class="form-section">
+                <h2>Basic Settings</h2>
+
+                <div class="form-group">
+                    <label for="name">Job Name *</label>
+                    <input type="text" id="name" name="name" required
+                           value="{{ job.name if job else '' }}"
+                           placeholder="e.g., Prep Time Monitor">
+                </div>
+
+                <div class="form-group">
+                    <label for="url">Target URL *</label>
+                    <input type="url" id="url" name="url" required
+                           value="{{ job.url if job else '' }}"
+                           placeholder="https://example.com/reports">
+                    <small>The page where you'll download the CSV from</small>
+                </div>
+            </section>
+
+            <!-- CSV Download Actions -->
+            <section class="form-section">
+                <h2>CSV Download Actions</h2>
+                <p class="section-help">Define the click sequence to download the CSV file (e.g., dropdown menu, export button, etc.)</p>
+
+                <div id="downloadActionsList" class="actions-list">
+                    <!-- Actions will be rendered here -->
+                </div>
+
+                <div class="action-buttons">
+                    <button type="button" class="btn" onclick="showDownloadActionModal()">
+                        + Add Click Action
+                    </button>
+                    <button type="button" class="btn" onclick="testDownloadActions()" id="testDownloadBtn" style="display: none;">
+                        Test Download Sequence
+                    </button>
+                </div>
+
+                <div class="form-group" style="margin-top: 16px;">
+                    <label for="csv_filename_pattern">CSV Filename Pattern *</label>
+                    <input type="text" id="csv_filename_pattern" required
+                           value="{{ job.csv_config.csv_filename_pattern if job and job.csv_config else 'Order History-*.csv' }}"
+                           placeholder="Order History-*.csv">
+                    <small>Use * as wildcard for timestamps or variable parts (e.g., "report-*.csv")</small>
+                </div>
+            </section>
+
+            <!-- Download Action Modal -->
+            <div id="downloadActionModal" class="modal" style="display: none;">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3 id="downloadActionModalTitle">Add Download Action</h3>
+                        <button type="button" class="modal-close" onclick="closeDownloadActionModal()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="form-group">
+                            <label for="downloadActionType">Action Type</label>
+                            <select id="downloadActionType" onchange="updateDownloadActionForm()">
+                                <option value="click_coordinates">Click at Coordinates</option>
+                                <option value="click_ocr">Click Element by Text (OCR)</option>
+                                <option value="wait">Wait (seconds)</option>
+                            </select>
+                        </div>
+
+                        <div id="downloadActionFormFields">
+                            <!-- Dynamic form fields will be inserted here -->
+                        </div>
+
+                        <div class="form-group">
+                            <label for="downloadActionWaitAfter">Wait After Action (seconds)</label>
+                            <input type="number" id="downloadActionWaitAfter" value="2" min="0" step="0.5">
+                            <small>Time to wait after this action completes</small>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn" onclick="closeDownloadActionModal()">Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="testDownloadAction()">Test Action</button>
+                        <button type="button" class="btn btn-success" onclick="saveDownloadAction()">Save Action</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Analysis Configuration -->
+            <section class="form-section">
+                <h2>Analysis Settings</h2>
+
+                <div class="form-group">
+                    <label for="threshold_minutes">Prep Time Threshold (minutes) *</label>
+                    <input type="number" id="threshold_minutes" required
+                           value="{{ job.csv_config.threshold_minutes if job and job.csv_config else 10 }}"
+                           min="1" max="60">
+                    <small>Alert if average prep time for any hour exceeds this value</small>
+                </div>
+
+                <h3>CSV Column Mapping</h3>
+                <p class="section-help">Specify the exact column names from your CSV file</p>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="col_datetime">Datetime Column *</label>
+                        <input type="text" id="col_datetime" required
+                               value="{{ job.csv_config.columns.datetime if job and job.csv_config and job.csv_config.columns else 'Fulfilled' }}"
+                               placeholder="Fulfilled">
+                    </div>
+                    <div class="form-group">
+                        <label for="col_prep_time">Prep Time Column *</label>
+                        <input type="text" id="col_prep_time" required
+                               value="{{ job.csv_config.columns.prep_time if job and job.csv_config and job.csv_config.columns else 'Prep Time' }}"
+                               placeholder="Prep Time">
+                    </div>
+                    <div class="form-group">
+                        <label for="col_items">Items Quantity Column *</label>
+                        <input type="text" id="col_items" required
+                               value="{{ job.csv_config.columns.items if job and job.csv_config and job.csv_config.columns else 'Items Quantity' }}"
+                               placeholder="Items Quantity">
+                    </div>
+                </div>
+            </section>
+
+            <!-- Telegram Configuration -->
+            <section class="form-section">
+                <h2>Telegram Alerts</h2>
+
+                <div class="form-group">
+                    <label for="telegram_bot_token">Bot Token</label>
+                    <input type="text" id="telegram_bot_token" name="telegram_bot_token"
+                           value="{{ job.telegram_bot_token if job else '' }}"
+                           placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz">
+                    <small>Get from @BotFather on Telegram</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="telegram_chat_id">Chat ID</label>
+                    <input type="text" id="telegram_chat_id" name="telegram_chat_id"
+                           value="{{ job.telegram_chat_id if job else '' }}"
+                           placeholder="-100123456789">
+                    <small>Channel/group ID (starts with -100 for channels)</small>
+                </div>
+
+                <button type="button" class="btn" onclick="testTelegram()">
+                    Test Telegram Connection
+                </button>
+                <span id="telegramStatus"></span>
+            </section>
+
+            <!-- Schedule -->
+            <section class="form-section">
+                <h2>Schedule</h2>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="schedule_interval_hours">Run Every</label>
+                        <div class="input-with-suffix">
+                            <input type="number" id="schedule_interval_hours" name="schedule_interval_hours"
+                                   value="{{ job.schedule_interval_hours if job else 2 }}" min="1" max="24">
+                            <span>hours</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="active">Status</label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="active" name="active" {{ 'checked' if job and job.active else '' }}>
+                            Active (job will run automatically)
+                        </label>
+                    </div>
+                </div>
+
+                <h3>Active Hours</h3>
+                <p class="section-help">Job only runs during these hours (useful for business hours only)</p>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="active_start_hour">Start Hour</label>
+                        <select id="active_start_hour">
+                            {% for h in range(24) %}
+                            <option value="{{ h }}" {{ 'selected' if (job and job.csv_config and job.csv_config.active_start_hour == h) or (not job and h == 10) else '' }}>
+                                {{ '%02d:00'|format(h) }} ({{ '%d %s'|format(h % 12 or 12, 'AM' if h < 12 else 'PM') }})
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="active_end_hour">End Hour</label>
+                        <select id="active_end_hour">
+                            {% for h in range(24) %}
+                            <option value="{{ h }}" {{ 'selected' if (job and job.csv_config and job.csv_config.active_end_hour == h) or (not job and h == 23) else '' }}>
+                                {{ '%02d:00'|format(h) }} ({{ '%d %s'|format(h % 12 or 12, 'AM' if h < 12 else 'PM') }})
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Test -->
+            <section class="form-section">
+                <h2>Test Full Workflow</h2>
+                <p class="section-help">Test the complete CSV download and analysis process</p>
+
+                <button type="button" class="btn btn-primary" onclick="testFullWorkflow()">
+                    Run Full Test
+                </button>
+
+                <div id="testResults" class="test-results" style="display: none;">
+                    <h4>Test Results</h4>
+                    <pre id="testResultsContent"></pre>
+                </div>
+            </section>
+
+            <!-- Submit -->
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary btn-large">
+                    {{ 'Update' if job else 'Create' }} CSV Job
+                </button>
+                <a href="/" class="btn btn-large">Cancel</a>
+            </div>
+        </form>
+    </div>
+
+    <script src="/static/js/csv_job_editor.js"></script>
+    <script>
+        // Initialize with existing data if editing
+        {% if job and job.csv_config and job.csv_config.download_actions %}
+        downloadActions = {{ job.csv_config.download_actions | tojson }};
+        updateDownloadActionsList();
+        {% endif %}
+
+        // Form submission
+        document.getElementById('csvJobForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const csvConfig = {
+                download_actions: downloadActions,
+                csv_filename_pattern: document.getElementById('csv_filename_pattern').value,
+                threshold_minutes: parseInt(document.getElementById('threshold_minutes').value),
+                columns: {
+                    datetime: document.getElementById('col_datetime').value,
+                    prep_time: document.getElementById('col_prep_time').value,
+                    items: document.getElementById('col_items').value
+                },
+                active_start_hour: parseInt(document.getElementById('active_start_hour').value),
+                active_end_hour: parseInt(document.getElementById('active_end_hour').value)
+            };
+
+            const formData = {
+                name: document.getElementById('name').value,
+                url: document.getElementById('url').value,
+                job_type: 'csv_analysis',
+                csv_config: csvConfig,
+                telegram_bot_token: document.getElementById('telegram_bot_token').value,
+                telegram_chat_id: document.getElementById('telegram_chat_id').value,
+                schedule_interval_hours: parseInt(document.getElementById('schedule_interval_hours').value),
+                active: document.getElementById('active').checked
+            };
+
+            try {
+                const jobId = {{ job.id if job else 'null' }};
+                const url = jobId ? `/api/job/${jobId}` : '/api/csv-job';
+                const method = jobId ? 'PUT' : 'POST';
+
+                const response = await fetch(url, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    window.location.href = '/';
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (e) {
+                alert('Error saving job: ' + e.message);
+            }
+        });
+
+        // Test Telegram
+        async function testTelegram() {
+            const status = document.getElementById('telegramStatus');
+            status.textContent = 'Testing...';
+            status.className = '';
+
+            try {
+                const response = await fetch('/api/test-telegram', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        telegram_bot_token: document.getElementById('telegram_bot_token').value,
+                        telegram_chat_id: document.getElementById('telegram_chat_id').value
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    status.textContent = `Connected as @${result.bot_username}. Check Telegram for test message!`;
+                    status.className = 'status-success';
+                } else {
+                    status.textContent = 'Error: ' + result.error;
+                    status.className = 'status-error';
+                }
+            } catch (e) {
+                status.textContent = 'Error: ' + e.message;
+                status.className = 'status-error';
+            }
+        }
+
+        // Test full workflow
+        async function testFullWorkflow() {
+            const resultsDiv = document.getElementById('testResults');
+            const content = document.getElementById('testResultsContent');
+
+            resultsDiv.style.display = 'block';
+            content.textContent = 'Running full workflow test...\n\n';
+
+            try {
+                const csvConfig = {
+                    download_actions: downloadActions,
+                    csv_filename_pattern: document.getElementById('csv_filename_pattern').value,
+                    threshold_minutes: parseInt(document.getElementById('threshold_minutes').value),
+                    columns: {
+                        datetime: document.getElementById('col_datetime').value,
+                        prep_time: document.getElementById('col_prep_time').value,
+                        items: document.getElementById('col_items').value
+                    }
+                };
+
+                const response = await fetch('/api/test-csv-workflow', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ csv_config: csvConfig })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    let output = 'WORKFLOW TEST SUCCESSFUL\n\n';
+                    output += `CSV File: ${result.csv_file}\n`;
+                    output += `Date: ${result.date}\n`;
+                    output += `Threshold: ${csvConfig.threshold_minutes} minutes\n\n`;
+                    output += `ALERTS: ${result.alerts.length} hours exceeded threshold\n\n`;
+
+                    if (result.alerts.length > 0) {
+                        result.alerts.forEach(alert => {
+                            output += `  Hour ${alert.hour}:00 - Avg: ${alert.avg_prep_time.toFixed(1)} min\n`;
+                            output += `    Orders: ${alert.order_count} | Items: ${alert.total_items}\n\n`;
+                        });
+                    } else {
+                        output += '  All hours within threshold!\n';
+                    }
+
+                    if (result.message_preview) {
+                        output += '\nTELEGRAM MESSAGE PREVIEW:\n';
+                        output += result.message_preview;
+                    }
+
+                    content.textContent = output;
+                } else {
+                    content.textContent = 'Error: ' + result.error;
+                }
+            } catch (e) {
+                content.textContent = 'Error: ' + e.message;
+            }
+        }
+    </script>
+</body>
+</html>

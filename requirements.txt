@@ -1,0 +1,19 @@
+# Core dependencies for Automation Platform
+flask==3.0.0
+easyocr==1.7.0
+pyautogui==0.9.54
+pillow==10.1.0
+python-telegram-bot==20.7
+apscheduler==3.10.4
+
+# Additional utilities
+numpy>=1.24.0
+opencv-python-headless>=4.8.0
+pandas>=2.0.0
+
+# DOM extraction (uses Edge DevTools Protocol - no Chromium install needed)
+websocket-client>=1.6.0
+requests>=2.31.0
+
+# AI-assisted selector generation
+anthropic>=0.18.0

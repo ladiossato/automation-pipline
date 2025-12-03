@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Automation Platform - Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Automation Platform</h1>
+            <p class="subtitle">OCR-based web data extraction</p>
+        </header>
+
+        <nav>
+            <a href="/" class="active">Dashboard</a>
+            <a href="/job/new" class="btn btn-primary">+ New OCR Job</a>
+            <a href="/dom-job/new" class="btn btn-secondary">+ New DOM Job</a>
+            <a href="/csv-job/new" class="btn btn-secondary">+ New CSV Job</a>
+        </nav>
+
+        <!-- Stats -->
+        <section class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.total_jobs }}</div>
+                <div class="stat-label">Total Jobs</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.active_jobs }}</div>
+                <div class="stat-label">Active Jobs</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.total_extracted_data }}</div>
+                <div class="stat-label">Data Points</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.total_execution_logs }}</div>
+                <div class="stat-label">Executions</div>
+            </div>
+        </section>
+
+        <!-- Jobs List -->
+        <section class="jobs-section">
+            <h2>Jobs</h2>
+
+            {% if jobs %}
+            <table class="jobs-table">
+                <thead>
+                    <tr>
+                        <th>Status</th>
+                        <th>Type</th>
+                        <th>Name</th>
+                        <th>URL</th>
+                        <th>Schedule</th>
+                        <th>Last Run</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for job in jobs %}
+                    <tr>
+                        <td>
+                            <span class="status-badge {{ 'active' if job.active else 'inactive' }}">
+                                {{ 'Active' if job.active else 'Inactive' }}
+                            </span>
+                        </td>
+                        <td>
+                            <span class="job-type-badge {{ job.job_type or 'ocr_extraction' }}">
+                                {% if job.job_type == 'dom_extraction' %}
+                                    DOM
+                                {% elif job.job_type == 'csv_analysis' %}
+                                    CSV
+                                {% else %}
+                                    OCR
+                                {% endif %}
+                            </span>
+                        </td>
+                        <td>
+                            {% if job.job_type == 'dom_extraction' %}
+                                <a href="/dom-job/{{ job.id }}">{{ job.name }}</a>
+                            {% elif job.job_type == 'csv_analysis' %}
+                                <a href="/csv-job/{{ job.id }}">{{ job.name }}</a>
+                            {% else %}
+                                <a href="/job/{{ job.id }}">{{ job.name }}</a>
+                            {% endif %}
+                        </td>
+                        <td class="url-cell" title="{{ job.url }}">
+                            {{ job.url[:40] }}{% if job.url|length > 40 %}...{% endif %}
+                        </td>
+                        <td>Every {{ job.schedule_interval_hours }}h</td>
+                        <td>
+                            {% if job.last_run %}
+                                {{ job.last_run[:16] }}
+                            {% else %}
+                                Never
+                            {% endif %}
+                        </td>
+                        <td class="actions">
+                            <button class="btn btn-small" onclick="toggleJob({{ job.id }})">
+                                {{ 'Pause' if job.active else 'Start' }}
+                            </button>
+                            <button class="btn btn-small btn-success" onclick="runJob({{ job.id }})">
+                                Run Now
+                            </button>
+                            {% if job.job_type == 'dom_extraction' %}
+                                <a href="/dom-job/{{ job.id }}" class="btn btn-small">Edit</a>
+                            {% elif job.job_type == 'csv_analysis' %}
+                                <a href="/csv-job/{{ job.id }}" class="btn btn-small">Edit</a>
+                            {% else %}
+                                <a href="/job/{{ job.id }}" class="btn btn-small">Edit</a>
+                            {% endif %}
+                            <a href="/job/{{ job.id }}/logs" class="btn btn-small">Logs</a>
+                            <button class="btn btn-small btn-danger" onclick="deleteJob({{ job.id }}, '{{ job.name }}')">
+                                Delete
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">
+                <p>No jobs configured yet.</p>
+                <a href="/job/new" class="btn btn-primary">Create Your First Job</a>
+            </div>
+            {% endif %}
+        </section>
+    </div>
+
+    <script>
+        async function toggleJob(jobId) {
+            try {
+                const response = await fetch(`/api/job/${jobId}/toggle`, { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    location.reload();
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (e) {
+                alert('Error toggling job: ' + e.message);
+            }
+        }
+
+        async function runJob(jobId) {
+            if (!confirm('Run this job now?')) return;
+
+            try {
+                const response = await fetch(`/api/run-job/${jobId}`, { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    alert('Job executed successfully!');
+                    location.reload();
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (e) {
+                alert('Error running job: ' + e.message);
+            }
+        }
+
+        async function deleteJob(jobId, jobName) {
+            if (!confirm(`Delete job "${jobName}"? This cannot be undone.`)) return;
+
+            try {
+                const response = await fetch(`/api/job/${jobId}`, { method: 'DELETE' });
+                const data = await response.json();
+                if (data.success) {
+                    location.reload();
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (e) {
+                alert('Error deleting job: ' + e.message);
+            }
+        }
+    </script>
+</body>
+</html>

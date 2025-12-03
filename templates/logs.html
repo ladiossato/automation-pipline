@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logs - {{ job.name }} - Automation Platform</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Execution Logs</h1>
+            <p class="subtitle">{{ job.name }}</p>
+        </header>
+
+        <nav>
+            <a href="/">Dashboard</a>
+            <a href="/job/{{ job.id }}">Edit Job</a>
+            <a href="/job/{{ job.id }}/logs" class="active">Logs</a>
+        </nav>
+
+        <!-- Job Summary -->
+        <section class="job-summary">
+            <div class="summary-item">
+                <strong>URL:</strong> {{ job.url }}
+            </div>
+            <div class="summary-item">
+                <strong>Status:</strong>
+                <span class="status-badge {{ 'active' if job.active else 'inactive' }}">
+                    {{ 'Active' if job.active else 'Inactive' }}
+                </span>
+            </div>
+            <div class="summary-item">
+                <strong>Last Run:</strong> {{ job.last_run if job.last_run else 'Never' }}
+            </div>
+        </section>
+
+        <!-- Logs Table -->
+        <section class="logs-section">
+            <h2>Recent Executions</h2>
+
+            {% if logs %}
+            <table class="logs-table">
+                <thead>
+                    <tr>
+                        <th>Started</th>
+                        <th>Duration</th>
+                        <th>Status</th>
+                        <th>Pages</th>
+                        <th>Extracted</th>
+                        <th>New</th>
+                        <th>Duplicates</th>
+                        <th>Sent</th>
+                        <th>Error</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in logs %}
+                    <tr class="{{ log.status }}">
+                        <td>{{ log.started_at[:19] if log.started_at else '-' }}</td>
+                        <td>{{ '%.1f' | format(log.duration_seconds) if log.duration_seconds else '-' }}s</td>
+                        <td>
+                            <span class="status-badge {{ log.status }}">
+                                {{ log.status }}
+                            </span>
+                        </td>
+                        <td>{{ log.pages_processed or 0 }}</td>
+                        <td>{{ log.items_extracted or 0 }}</td>
+                        <td class="highlight-new">{{ log.items_new or 0 }}</td>
+                        <td>{{ log.items_duplicate or 0 }}</td>
+                        <td>{{ log.items_sent or 0 }}</td>
+                        <td class="error-cell">
+                            {% if log.error_message %}
+                            <span class="error-text" title="{{ log.error_message }}">
+                                {{ log.error_message[:50] }}{% if log.error_message|length > 50 %}...{% endif %}
+                            </span>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">
+                <p>No execution logs yet.</p>
+                <p>Run the job to see logs here.</p>
+            </div>
+            {% endif %}
+        </section>
+
+        <!-- Extracted Data -->
+        <section class="data-section">
+            <h2>Recent Extracted Data</h2>
+
+            <div id="dataContainer">
+                <p>Loading...</p>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        // Load extracted data
+        async function loadData() {
+            try {
+                const response = await fetch('/api/job/{{ job.id }}/data?limit=20');
+                const data = await response.json();
+
+                const container = document.getElementById('dataContainer');
+
+                if (data.length === 0) {
+                    container.innerHTML = '<p class="empty-state">No data extracted yet.</p>';
+                    return;
+                }
+
+                let html = '<table class="data-table"><thead><tr>';
+                html += '<th>Extracted At</th><th>Sent</th><th>Data</th>';
+                html += '</tr></thead><tbody>';
+
+                for (const item of data) {
+                    html += '<tr>';
+                    html += `<td>${item.extracted_at.substring(0, 19)}</td>`;
+                    html += `<td>${item.sent_to_telegram ? 'Yes' : 'No'}</td>`;
+                    html += `<td><pre>${JSON.stringify(item.data, null, 2)}</pre></td>`;
+                    html += '</tr>';
+                }
+
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            } catch (e) {
+                document.getElementById('dataContainer').innerHTML =
+                    '<p class="error">Error loading data: ' + e.message + '</p>';
+            }
+        }
+
+        loadData();
+    </script>
+</body>
+</html>
